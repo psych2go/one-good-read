@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "one-good-read",
+  "main": "src/index.tsx",
+  "compatibility_date": "2026-08-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/", "/archive*", "/read/*", "/about", "/admin/*", "/api/*", "/health"]
+  },
+  "vars": {
+    "APP_NAME": "One Good Read",
+    "APP_ORIGIN": "http://localhost:8787",
+    "AI_PROVIDER": "heuristic",
+    "AI_MODEL": "gpt-5.4",
+    "ANALYSIS_VERSION": "blind-v1-context-v1",
+    "SELECTION_VERSION": "selection-v1",
+    "ADMIN_EMAIL": "local@example.com"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "one-good-read",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "CONTENT",
+      "bucket_name": "one-good-read-content"
+    }
+  ],
+  "vectorize": [
+    {
+      "binding": "ARTICLE_VECTORS",
+      "index_name": "one-good-read-articles"
+    }
+  ],
+  "workflows": [
+    {
+      "binding": "DAILY_WORKFLOW",
+      "name": "one-good-read-daily",
+      "class_name": "DailyReadingWorkflow"
+    },
+    {
+      "binding": "BACKFILL_WORKFLOW",
+      "name": "one-good-read-backfill",
+      "class_name": "BackfillWorkflow"
+    }
+  ],
+  "triggers": {
+    "crons": ["30 16 * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

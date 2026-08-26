@@ -1,0 +1,95 @@
+import { Hono } from "hono";
+import { html } from "hono/html";
+import { addFeedback } from "./db/repository";
+import { archiveFacets, archiveRecommendations, latestRecommendation, recommendationByDate } from "./db/queries";
+import { shanghaiDate } from "./domain/date";
+import type { FeedbackKind } from "./domain/types";
+import { AdminPage } from "./web/admin";
+import { AboutPage, ArchivePage, HomePage, ReadPage } from "./web/pages";
+import { BackfillWorkflow } from "./workflows/backfill";
+import { DailyReadingWorkflow } from "./workflows/daily";
+
+export { BackfillWorkflow, DailyReadingWorkflow };
+
+type AppBindings = { Bindings: Env };
+const app = new Hono<AppBindings>();
+
+app.get("/", async (c) => c.html(<HomePage item={await latestRecommendation(c.env.DB)} origin={String(c.env.APP_ORIGIN)} />));
+app.get("/read/:date", async (c) => {
+  const date = c.req.param("date");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.notFound();
+  const item = await recommendationByDate(c.env.DB, date);
+  return item ? c.html(<ReadPage item={item} origin={String(c.env.APP_ORIGIN)} />) : c.notFound();
+});
+app.get("/archive", async (c) => {
+  const page = Math.max(1, Number(c.req.query("page") ?? 1));
+  const filters = { author: clean(c.req.query("author")), theme: clean(c.req.query("theme")), year: clean(c.req.query("year")) };
+  const [archive, facets] = await Promise.all([archiveRecommendations(c.env.DB, { page, ...filters }), archiveFacets(c.env.DB)]);
+  return c.html(<ArchivePage rows={archive.rows} facets={facets} page={page} hasNext={archive.hasNext} filters={filters} origin={String(c.env.APP_ORIGIN)} />);
+});
+app.get("/about", (c) => c.html(<AboutPage origin={String(c.env.APP_ORIGIN)} />));
+app.get("/health", async (c) => {
+  const db = await c.env.DB.prepare("SELECT 1 ok").first<{ ok: number }>();
+  return c.json({ ok: db?.ok === 1, date: shanghaiDate(), analysisVersion: c.env.ANALYSIS_VERSION, selectionVersion: c.env.SELECTION_VERSION });
+});
+app.get("/sitemap.xml", async (c) => {
+  const rows = await c.env.DB.prepare("SELECT recommendation_date FROM recommendations WHERE status='published' AND datetime(published_at) <= datetime('now') ORDER BY recommendation_date DESC LIMIT 5000").all<{ recommendation_date: string }>();
+  const origin = String(c.env.APP_ORIGIN).replace(/\/$/, "");
+  const urls = ["/", "/archive", "/about", ...rows.results.map((row) => `/read/${row.recommendation_date}`)];
+  return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((path) => `<url><loc>${escapeXml(`${origin}${path}`)}</loc></url>`).join("")}</urlset>`, 200, { "Content-Type": "application/xml; charset=utf-8" });
+});
+
+app.use("/admin/*", async (c, next) => {
+  if (!isAdmin(c.req.raw, c.env)) return c.text("Not authorized", 403);
+  if (c.req.method !== "GET" && !sameOrigin(c.req.raw, String(c.env.APP_ORIGIN))) return c.text("Invalid origin", 403);
+  await next();
+});
+app.get("/admin", async (c) => {
+  const [articleCounts, sources, runs, recommendations] = await Promise.all([
+    c.env.DB.prepare(`SELECT count(*) articles, sum(CASE WHEN status='ready' THEN 1 ELSE 0 END) ready, sum(CASE WHEN status='analysis_failed' THEN 1 ELSE 0 END) failures FROM articles`).first<{ articles: number; ready: number; failures: number }>(),
+    c.env.DB.prepare("SELECT id,name,status,last_scanned_at,consecutive_failures FROM sources ORDER BY name").all<{ id: string; name: string; status: string; last_scanned_at: string | null; consecutive_failures: number }>(),
+    c.env.DB.prepare(`SELECT s.id,s.recommendation_date,s.status,a.title winner_title,s.failure_reason,s.created_at FROM selection_runs s LEFT JOIN articles a ON a.id=s.winner_article_id ORDER BY s.created_at DESC LIMIT 20`).all<{ id: string; recommendation_date: string; status: string; winner_title: string | null; failure_reason: string | null; created_at: string }>(),
+    c.env.DB.prepare(`SELECT r.id,r.recommendation_date,a.title,a.author,(SELECT f.kind FROM feedback f WHERE f.recommendation_id=r.id ORDER BY f.created_at DESC LIMIT 1) feedback_kind FROM recommendations r JOIN articles a ON a.id=r.article_id WHERE r.status='published' ORDER BY r.recommendation_date DESC LIMIT 20`).all<{ id: string; recommendation_date: string; title: string; author: string; feedback_kind: string | null }>(),
+  ]);
+  const recCount = await c.env.DB.prepare("SELECT count(*) count FROM recommendations WHERE status='published'").first<{ count: number }>();
+  return c.html(<AdminPage data={{ counts: { articles: articleCounts?.articles ?? 0, ready: articleCounts?.ready ?? 0, recommendations: recCount?.count ?? 0, failures: articleCounts?.failures ?? 0 }, sources: sources.results, runs: runs.results, recommendations: recommendations.results }} />);
+});
+app.post("/admin/run-daily", async (c) => {
+  const date = shanghaiDate();
+  try { await c.env.DAILY_WORKFLOW.create({ id: `daily-${date}`, params: { date, scan: true, deferPublication: false }, retention: { successRetention: "3 days", errorRetention: "3 days" } }); } catch (error) { console.log(JSON.stringify({ event: "daily_workflow_existing", date, message: error instanceof Error ? error.message : String(error) })); }
+  return c.redirect("/admin", 303);
+});
+app.post("/admin/backfill", async (c) => {
+  await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${crypto.randomUUID()}`, params: { limit: 25 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
+  return c.redirect("/admin", 303);
+});
+app.post("/admin/recommendations/:id/feedback", async (c) => {
+  const body = await c.req.parseBody();
+  const kind = body.kind;
+  if (typeof kind !== "string" || !isFeedbackKind(kind)) return c.text("Invalid feedback", 400);
+  await addFeedback(c.env.DB, c.req.param("id"), kind);
+  return c.redirect("/admin", 303);
+});
+
+app.notFound((c) => c.html(html`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><link rel="stylesheet" href="/styles.css"><title>Not found — One Good Read</title></head><body><main><section class="empty-state"><p class="edition-label">404</p><h1>这里没有今天的阅读。</h1><p><a href="/">返回首页</a></p></section></main></body></html>`, 404));
+app.onError((error, c) => { console.error(JSON.stringify({ event: "request_error", path: c.req.path, message: error.message, stack: error.stack })); return c.json({ error: "internal_error" }, 500); });
+
+export default {
+  fetch: app.fetch,
+  async scheduled(_controller, env, ctx) {
+    const date = shanghaiDate();
+    ctx.waitUntil((async () => {
+      try { await env.DAILY_WORKFLOW.create({ id: `daily-${date}`, params: { date, scan: true, deferPublication: true }, retention: { successRetention: "3 days", errorRetention: "3 days" } }); }
+      catch (error) { console.log(JSON.stringify({ event: "scheduled_workflow_existing", date, message: error instanceof Error ? error.message : String(error) })); }
+    })());
+  },
+} satisfies ExportedHandler<Env>;
+
+function clean(value: string | undefined): string | undefined { const result = value?.trim(); return result || undefined; }
+function isFeedbackKind(value: string): value is FeedbackKind { return ["valuable","good","not_for_me","unfinished","later"].includes(value); }
+function isAdmin(request: Request, env: Env): boolean {
+  if (new URL(String(env.APP_ORIGIN)).hostname === "localhost") return true;
+  return request.headers.get("Cf-Access-Authenticated-User-Email")?.toLowerCase() === String(env.ADMIN_EMAIL).toLowerCase();
+}
+function sameOrigin(request: Request, origin: string): boolean { const value = request.headers.get("Origin"); return !value || value === origin.replace(/\/$/, ""); }
+function escapeXml(value: string): string { return value.replace(/[<>&'"]/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[char] ?? char); }
