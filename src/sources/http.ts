@@ -9,6 +9,7 @@ export async function fetchBoundedText(url: string, init: RequestInit = {}, maxB
       ...init.headers,
     },
     redirect: "follow",
+    signal: init.signal ?? AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Fetch failed ${response.status} for ${url}`);
   const declared = Number(response.headers.get("content-length") ?? 0);

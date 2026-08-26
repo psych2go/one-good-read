@@ -9,7 +9,15 @@ export interface IngestSummary { sourceId: string; discovered: number; analyzed:
 
 export async function ingestSource(env: Env, sourceId: string, processLimit: number): Promise<IngestSummary> {
   const adapter = sourceAdapter(sourceId);
-  const articles = await adapter.discover();
+  let articles: DiscoveredArticle[];
+  try {
+    articles = await adapter.discover();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(JSON.stringify({ event: "source_discovery_failed", sourceId, message }));
+    await env.DB.prepare("UPDATE sources SET consecutive_failures=consecutive_failures+1, updated_at=? WHERE id=?").bind(new Date().toISOString(), sourceId).run();
+    throw error;
+  }
   const summary: IngestSummary = { sourceId, discovered: articles.length, analyzed: 0, rejected: 0, skipped: 0, errors: [] };
   const now = new Date().toISOString();
   let processed = 0;

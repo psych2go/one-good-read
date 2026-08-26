@@ -38,7 +38,7 @@ Worker
 
 ## Production hardening still planned
 
-- Add the remaining allowlisted source adapters.
+- Confirm a compliant free full-text discovery path for Bloomberg Money Stuff; the other allowlisted source groups now have adapters.
 - Generate and query embeddings in Vectorize.
 - Train and version the small-sample learning-to-rank model.
 - Validate Cloudflare Access JWTs inside the Worker as defense in depth.

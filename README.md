@@ -4,11 +4,20 @@ One Good Read is an open-source, Cloudflare-native daily reading system. It read
 
 ## Current milestone
 
-The repository contains the first end-to-end vertical slice for:
+The repository now includes source adapters for:
 
 - Paul Graham Essays
-- Marginal Revolution (Tyler Cowen and Alex Tabarrok, using the official RSS feed)
+- Morgan Housel and Ted Lamade at Collaborative Fund
+- Nassim Nicholas Taleb
+- Farnam Street
 - Howard Marks Memos
+- Astral Codex Ten
+- Stratechery free Articles
+- Marginal Revolution (Tyler Cowen and Alex Tabarrok)
+- Aswath Damodaran
+- Benedict Evans
+
+Bloomberg Money Stuff remains deferred until a compliant, stable, free full-text discovery path is confirmed.
 
 The local default uses a deterministic heuristic analyzer so the system can run without paid credentials. Production should set `AI_PROVIDER=openai` and store `OPENAI_API_KEY` as a Wrangler secret.
 
@@ -18,6 +27,7 @@ The local default uses a deterministic heuristic analyzer so the system can run 
 - D1: metadata, analyses, recommendations, feedback, audit snapshots
 - R2: private normalized article text
 - Vectorize: reserved for semantic features in the next milestone
+- Source probes: administrator-only discovery/extraction diagnostics
 - Workflows: durable daily and backfill pipelines
 - Access: protect `/admin/*` in production
 
@@ -30,7 +40,7 @@ npx wrangler d1 migrations apply one-good-read --local
 npm run dev
 ```
 
-Open `http://localhost:8787/admin`, run a backfill, then run the daily workflow. Local admin access is intentionally allowed only when `APP_ORIGIN` points to `localhost`.
+Open `http://localhost:8787/admin`, run a source-specific or full backfill, then run the daily workflow. `GET /admin/probe/:sourceId?extract=1` verifies discovery and the first extraction without persisting it. Local admin access is intentionally allowed only when `APP_ORIGIN` points to `localhost`.
 
 ## Production setup
 
@@ -59,3 +69,7 @@ The cron expression `30 16 * * *` runs at 00:30 Asia/Shanghai. The workflow publ
 ## License
 
 MIT
+
+## Local network note
+
+In this development environment, Workerd requests routed through the configured proxy time out for the Taleb Substack and Blogger/Damodaran feed hosts even though direct command-line requests succeed. The adapters use official feeds and are covered by parser tests; production deployment must run the administrator source probes before enabling them. Source fetches have a 30-second timeout and surface failures instead of hanging indefinitely.

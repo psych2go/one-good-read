@@ -1,4 +1,15 @@
-export type SourceId = "paul-graham" | "marginal-revolution" | "howard-marks";
+export type SourceId =
+  | "paul-graham"
+  | "marginal-revolution"
+  | "howard-marks"
+  | "nassim-taleb"
+  | "farnam-street"
+  | "astral-codex-ten"
+  | "aswath-damodaran"
+  | "benedict-evans"
+  | "stratechery"
+  | "morgan-housel"
+  | "ted-lamade";
 
 export interface DiscoveredArticle {
   sourceId: SourceId;

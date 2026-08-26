@@ -1,10 +1,13 @@
 import type { SourceAdapter } from "./adapter";
 import { HowardMarksAdapter } from "./howard-marks";
+import { CollabFundAdapter, COLLAB_FUND_CONFIGS } from "./collab-fund";
 import { MarginalRevolutionAdapter } from "./marginal-revolution";
 import { PaulGrahamAdapter } from "./paul-graham";
+import { RssSourceAdapter } from "./rss";
+import { RSS_SOURCE_CONFIGS } from "./rss-config";
 
 export function sourceAdapters(): SourceAdapter[] {
-  return [new PaulGrahamAdapter(), new MarginalRevolutionAdapter(), new HowardMarksAdapter()];
+  return [new PaulGrahamAdapter(), new MarginalRevolutionAdapter(), new HowardMarksAdapter(), ...RSS_SOURCE_CONFIGS.map((config) => new RssSourceAdapter(config)), ...COLLAB_FUND_CONFIGS.map((config) => new CollabFundAdapter(config))];
 }
 
 export function sourceAdapter(id: string): SourceAdapter {

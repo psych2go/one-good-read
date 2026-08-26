@@ -7,6 +7,8 @@ import type { FeedbackKind } from "./domain/types";
 import { AdminPage } from "./web/admin";
 import { AboutPage, ArchivePage, HomePage, ReadPage } from "./web/pages";
 import { BackfillWorkflow } from "./workflows/backfill";
+import { adapterIds } from "./workflows/pipeline";
+import { sourceAdapter } from "./sources";
 import { DailyReadingWorkflow } from "./workflows/daily";
 
 export { BackfillWorkflow, DailyReadingWorkflow };
@@ -61,6 +63,21 @@ app.post("/admin/run-daily", async (c) => {
 });
 app.post("/admin/backfill", async (c) => {
   await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${crypto.randomUUID()}`, params: { limit: 25 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
+  return c.redirect("/admin", 303);
+});
+app.get("/admin/probe/:sourceId", async (c) => {
+  const sourceId = c.req.param("sourceId");
+  if (!adapterIds().includes(sourceId)) return c.json({ error: "unknown_source" }, 404);
+  const startedAt = Date.now();
+  const adapter = sourceAdapter(sourceId);
+  const articles = await adapter.discover();
+  const first = c.req.query("extract") === "1" && articles[0] ? await adapter.extract(articles[0]) : undefined;
+  return c.json({ sourceId, discovered: articles.length, elapsedMs: Date.now() - startedAt, sample: articles.slice(0, 3).map(({ title, author, canonicalUrl, publishedAt }) => ({ title, author, canonicalUrl, publishedAt })), extraction: first ? { title: first.title, wordCount: first.wordCount, readingMinutes: first.readingMinutes, confidence: first.extractionConfidence, links: first.externalLinkCount } : undefined });
+});
+app.post("/admin/backfill/:sourceId", async (c) => {
+  const sourceId = c.req.param("sourceId");
+  if (!adapterIds().includes(sourceId)) return c.text("Unknown source", 404);
+  await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${sourceId}-${crypto.randomUUID()}`, params: { sourceId, limit: 5 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
   return c.redirect("/admin", 303);
 });
 app.post("/admin/recommendations/:id/feedback", async (c) => {
