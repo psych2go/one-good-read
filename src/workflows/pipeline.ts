@@ -1,8 +1,11 @@
 import { aiProvider } from "../ai";
+import { backfillMissingEmbeddings, createAndStoreEmbedding, projectionMap } from "../embeddings/service";
+import { getOrTrainPreferenceModel, loadActivePreferenceModel, predictPersonalFit } from "../preferences/model";
+import { semanticSignals } from "../preferences/semantic";
 import { contentRejectionReason } from "../domain/content-gate";
-import { passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
+import { diverseTop, passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
 import type { DiscoveredArticle, RankedCandidate } from "../domain/types";
-import { createSelectionRun, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, upsertDiscovered, markRejected } from "../db/repository";
+import { annotateSelectionRun, createSelectionRun, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, upsertDiscovered, markRejected } from "../db/repository";
 import { sourceAdapter, sourceAdapters } from "../sources";
 
 export interface IngestSummary { sourceId: string; discovered: number; analyzed: number; rejected: number; skipped: number; errors: string[]; }
@@ -61,6 +64,7 @@ async function processArticle(env: Env, articleId: string, discovered: Discovere
     return;
   }
   await saveAnalysis(env.DB, analysis, now);
+  await createAndStoreEmbedding(env, { articleId, title: extracted.title, author: extracted.author, primaryTheme: analysis.primaryTheme, text: extracted.text });
 }
 
 export async function runDailySelection(env: Env, date: string, publishAt?: string): Promise<{ winnerArticleId: string; runId: string }> {
@@ -69,9 +73,13 @@ export async function runDailySelection(env: Env, date: string, publishAt?: stri
 
   const runId = await createSelectionRun(env.DB, date, String(env.SELECTION_VERSION), String(env.ANALYSIS_VERSION));
   try {
-    const [rows, history] = await Promise.all([readyCandidates(env.DB, String(env.ANALYSIS_VERSION)), recommendationHistory(env.DB)]);
+    const preferencePromise = getOrTrainPreferenceModel(env).catch(async (error) => { console.error(JSON.stringify({ event: "preference_training_fallback", message: error instanceof Error ? error.message : String(error) })); return loadActivePreferenceModel(env.DB, String(env.PREFERENCE_MODEL_VERSION), String(env.EMBEDDING_VERSION)); });
+    const [rows, history, preferenceModel] = await Promise.all([readyCandidates(env.DB, String(env.ANALYSIS_VERSION), String(env.EMBEDDING_VERSION)), recommendationHistory(env.DB), preferencePromise]);
+    await annotateSelectionRun(env.DB, runId, String(env.EMBEDDING_VERSION), preferenceModel?.id);
+    const historyProjections = await projectionMap(env.DB, history.map((item) => item.articleId), String(env.EMBEDDING_VERSION));
+    const recentVectors = history.slice(0, 7).flatMap((item) => { const vector = historyProjections.get(item.articleId); return vector ? [vector] : []; });
     const now = new Date(`${date}T06:00:00+08:00`);
-    const ranked = stableRank(rows.map((row) => rankCandidate({
+    const ranked = diverseTop(stableRank(rows.map((row) => rankCandidate({
       articleId: row.id,
       title: row.title,
       author: row.author,
@@ -81,7 +89,9 @@ export async function runDailySelection(env: Env, date: string, publishAt?: stri
       analysis: rowToAnalysis(row),
       history,
       now,
-    })).filter((candidate) => candidate.authorPenalty < 100)).slice(0, 10);
+      personalFit: predictPersonalFit(preferenceModel, { author: row.author, wordCount: row.word_count, analysis: rowToAnalysis(row), projection: row.projection ? JSON.parse(row.projection) as number[] : undefined }),
+      ...semanticForRow(row.projection, recentVectors),
+    })).filter((candidate) => candidate.authorPenalty < 100)), 10);
     if (!ranked.length) throw new Error("No eligible candidates passed the quality and diversity gates");
     await saveCandidateSnapshot(env.DB, runId, ranked);
 
@@ -120,6 +130,13 @@ async function firstReachable(candidates: RankedCandidate[]): Promise<RankedCand
     }
   }
   return reachable;
+}
+
+export { backfillMissingEmbeddings };
+
+function semanticForRow(projection: string | null, recentVectors: number[][]): { connectionBonus: number; semanticExplorationBonus: number } {
+  const signal = semanticSignals(projection ? JSON.parse(projection) as number[] : undefined, recentVectors);
+  return { connectionBonus: signal.connectionBonus, semanticExplorationBonus: signal.explorationBonus };
 }
 
 export function adapterIds(): string[] {

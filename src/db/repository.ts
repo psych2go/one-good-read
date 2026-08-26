@@ -8,6 +8,8 @@ export interface ReadyArticleRow {
   author: string;
   published_at: string | null;
   reading_minutes: number;
+  word_count: number;
+  projection: string | null;
   analysis_version: string;
   provider: string;
   model: string;
@@ -77,20 +79,21 @@ export async function saveAnalysis(db: D1Database, analysis: ArticleAnalysis, no
   await db.prepare("UPDATE articles SET status='ready', updated_at=? WHERE id=?").bind(now, analysis.articleId).run();
 }
 
-export async function readyCandidates(db: D1Database, analysisVersion: string, limit = 250): Promise<ReadyArticleRow[]> {
+export async function readyCandidates(db: D1Database, analysisVersion: string, embeddingVersion: string, limit = 250): Promise<ReadyArticleRow[]> {
   const result = await db.prepare(`
-    SELECT a.id, a.source_id, a.canonical_url, a.title, a.author, a.published_at, a.reading_minutes,
+    SELECT a.id, a.source_id, a.canonical_url, a.title, a.author, a.published_at, a.reading_minutes, a.word_count, e.projection,
       n.analysis_version, n.provider, n.model, n.intrinsic_score, n.long_term_value, n.idea_density,
       n.argument_quality, n.originality, n.clarity_structure, n.extraction_confidence,
       n.analysis_confidence, n.primary_theme, n.secondary_themes, n.keywords, n.evidence,
       n.risk_notes, n.context_summary
     FROM articles a
     JOIN analyses n ON n.article_id = a.id AND n.analysis_version = ?
+    LEFT JOIN embeddings e ON e.article_id=a.id AND e.embedding_version=?
     WHERE a.status='ready' AND a.access_state='free'
       AND NOT EXISTS (SELECT 1 FROM recommendations r WHERE r.article_id=a.id AND r.status='published')
     ORDER BY n.intrinsic_score DESC, a.id ASC
     LIMIT ?
-  `).bind(analysisVersion, limit).all<ReadyArticleRow>();
+  `).bind(analysisVersion, embeddingVersion, limit).all<ReadyArticleRow>();
   return result.results;
 }
 
@@ -185,4 +188,8 @@ export async function addFeedback(db: D1Database, recommendationId: string, kind
 export async function stableArticleId(url: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(url));
   return [...new Uint8Array(digest)].slice(0, 16).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function annotateSelectionRun(db: D1Database, runId: string, embeddingVersion: string, preferenceModelId?: string): Promise<void> {
+  await db.prepare("UPDATE selection_runs SET embedding_version=?,preference_model_id=? WHERE id=?").bind(embeddingVersion, preferenceModelId ?? null, runId).run();
 }

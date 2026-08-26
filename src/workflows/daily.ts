@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { adapterIds, ingestSource, runDailySelection } from "./pipeline";
+import { adapterIds, backfillMissingEmbeddings, ingestSource, runDailySelection } from "./pipeline";
 
 export interface DailyWorkflowParams { date: string; scan?: boolean; deferPublication?: boolean; }
 
@@ -12,6 +12,7 @@ export class DailyReadingWorkflow extends WorkflowEntrypoint<Env, DailyWorkflowP
         summaries.push(summary);
       }
     }
+    await step.do("backfill-embeddings", { retries: { limit: 2, delay: "10 minutes", backoff: "exponential" }, timeout: "2 hours" }, async () => backfillMissingEmbeddings(this.env, 5));
     let publishAt: string | undefined;
     if (event.payload.deferPublication) {
       const selectionTime = new Date(`${event.payload.date}T05:30:00+08:00`);

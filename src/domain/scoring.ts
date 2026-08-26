@@ -81,11 +81,12 @@ export function rankCandidate(input: {
   now: Date;
   personalFit?: number;
   connectionBonus?: number;
+  semanticExplorationBonus?: number;
 }): RankedCandidate {
   const fresh = freshnessBonus(input.publishedAt, input.now);
   const authorPenalty = authorFatigue(input.author, input.history, input.now);
   const themePenalty = themeFatigue(input.analysis.primaryTheme, input.history, input.now);
-  const explore = explorationBonus(input.analysis.primaryTheme, input.history);
+  const explore = Math.min(.75, explorationBonus(input.analysis.primaryTheme, input.history) + (input.semanticExplorationBonus ?? 0));
   const personal = clamp(input.personalFit ?? 0, -0.9, 0.9);
   const connection = clamp(input.connectionBonus ?? 0, 0, 0.5);
   const dynamicScore = round(input.analysis.intrinsicScore + fresh + explore + personal + connection - authorPenalty - themePenalty);
@@ -98,8 +99,24 @@ export function rankCandidate(input: {
     themePenalty,
     connectionBonus: connection,
     personalFit: personal,
-    explanation: `质量 ${input.analysis.intrinsicScore.toFixed(2)}；新鲜度 +${fresh.toFixed(2)}；探索 +${explore.toFixed(2)}；作者疲劳 -${authorPenalty.toFixed(2)}；主题疲劳 -${themePenalty.toFixed(2)}`,
+    explanation: `质量 ${input.analysis.intrinsicScore.toFixed(2)}；个人适配 ${personal >= 0 ? "+" : ""}${personal.toFixed(2)}；新鲜度 +${fresh.toFixed(2)}；连接 +${connection.toFixed(2)}；探索 +${explore.toFixed(2)}；作者疲劳 -${authorPenalty.toFixed(2)}；主题疲劳 -${themePenalty.toFixed(2)}`,
   };
+}
+
+
+export function diverseTop(candidates: RankedCandidate[], limit = 10, maxPerAuthor = 2, maxPerTheme = 3): RankedCandidate[] {
+  const selected: RankedCandidate[] = [];
+  const authors = new Map<string, number>();
+  const themes = new Map<string, number>();
+  for (const candidate of candidates) {
+    if ((authors.get(candidate.author) ?? 0) >= maxPerAuthor) continue;
+    if ((themes.get(candidate.analysis.primaryTheme) ?? 0) >= maxPerTheme) continue;
+    selected.push(candidate);
+    authors.set(candidate.author, (authors.get(candidate.author) ?? 0) + 1);
+    themes.set(candidate.analysis.primaryTheme, (themes.get(candidate.analysis.primaryTheme) ?? 0) + 1);
+    if (selected.length >= limit) break;
+  }
+  return selected;
 }
 
 export function stableRank(candidates: RankedCandidate[]): RankedCandidate[] {

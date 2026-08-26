@@ -26,7 +26,9 @@ The local default uses a deterministic heuristic analyzer so the system can run 
 - Workers + Static Assets: public site and admin routes
 - D1: metadata, analyses, recommendations, feedback, audit snapshots
 - R2: private normalized article text
-- Vectorize: reserved for semantic features in the next milestone
+- Vectorize: full 384-dimensional article embeddings
+- D1 projections: deterministic 64-dimensional semantic ranking features
+- Ridge preference model: versioned learning-to-rank after 10 effective feedback samples
 - Source probes: administrator-only discovery/extraction diagnostics
 - Workflows: durable daily and backfill pipelines
 - Access: protect `/admin/*` in production
@@ -44,8 +46,12 @@ Open `http://localhost:8787/admin`, run a source-specific or full backfill, then
 
 ## Production setup
 
-1. Create D1, R2, Vectorize, and Workflow resources and replace the placeholder D1 ID in `wrangler.jsonc`.
-2. Set `APP_ORIGIN`, `ADMIN_EMAIL`, `AI_PROVIDER`, and `AI_MODEL` for production.
+1. Create D1, R2, Workflow resources, and a 384-dimensional cosine Vectorize index; then replace the placeholder D1 ID in `wrangler.jsonc`.
+
+   ```bash
+   npx wrangler vectorize create one-good-read-articles --dimensions=384 --metric=cosine
+   ```
+2. Set `APP_ORIGIN`, `ADMIN_EMAIL`, `AI_PROVIDER`, `AI_MODEL`, `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, and version variables for production.
 3. Store the API key without committing it:
 
    ```bash
@@ -56,7 +62,11 @@ Open `http://localhost:8787/admin`, run a source-specific or full backfill, then
 5. Configure Cloudflare Access to protect `/admin/*` for the administrator account.
 6. Run `npm run check`, then deploy.
 
-The cron expression `30 16 * * *` runs at 00:30 Asia/Shanghai. The workflow publishes for the current Shanghai calendar date.
+The cron expression `30 16 * * *` runs at 00:30 Asia/Shanghai. The daily workflow gradually fills missing embeddings before selection; the admin can also run a dedicated 10-article embedding batch. The workflow publishes for the current Shanghai calendar date.
+
+## Semantic preference learning
+
+Full vectors are stored privately in R2 and Vectorize. Daily ranking uses compact D1 projections to compute recent-reading connections, knowledge-distance exploration, and a confidence-gated ridge preference model. See `docs/ml-ranking.md`.
 
 ## Data policy
 

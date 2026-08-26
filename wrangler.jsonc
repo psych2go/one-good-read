@@ -15,7 +15,12 @@
     "AI_PROVIDER": "heuristic",
     "AI_MODEL": "gpt-5.4",
     "ANALYSIS_VERSION": "blind-v1-context-v1",
-    "SELECTION_VERSION": "selection-v1",
+    "EMBEDDING_PROVIDER": "heuristic",
+    "EMBEDDING_MODEL": "text-embedding-3-small",
+    "EMBEDDING_DIMENSIONS": "384",
+    "EMBEDDING_VERSION": "embedding-v1",
+    "PREFERENCE_MODEL_VERSION": "ridge-v1",
+    "SELECTION_VERSION": "selection-v2-semantic",
     "ADMIN_EMAIL": "local@example.com"
   },
   "d1_databases": [

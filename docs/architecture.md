@@ -8,7 +8,10 @@ Cron Trigger
       -> private normalized text in R2
       -> blind + contextual AI analysis
       -> D1 versioned analysis
-      -> deterministic Top 10
+      -> R2 + Vectorize full embedding
+      -> D1 semantic projection
+      -> confidence-gated preference model
+      -> deterministic, diversified Top 10
       -> AI editorial choice
       -> scheduled recommendation in D1
 
@@ -39,8 +42,6 @@ Worker
 ## Production hardening still planned
 
 - Confirm a compliant free full-text discovery path for Bloomberg Money Stuff; the other allowlisted source groups now have adapters.
-- Generate and query embeddings in Vectorize.
-- Train and version the small-sample learning-to-rank model.
 - Validate Cloudflare Access JWTs inside the Worker as defense in depth.
 - Add email alerts, storage thresholds, and the 90-day R2 lifecycle cleanup.
 - Split large analysis artifacts from D1 into R2 before approaching the free D1 per-database limit.

@@ -58,3 +58,7 @@ Only “Later” permits automatic reappearance, after at least 14 days and at m
 ## Privacy and retention
 
 Normalized full text is private. Raw HTML is not retained. Recommended article text is deleted after 90 days; metadata, hashes, versioned analyses, and immutable selection snapshots remain. No saved full text is ever served as a replacement for an unavailable source page.
+
+## Implemented semantic layer
+
+Qualified articles receive versioned full-text embeddings. Recent-reading similarity contributes connection and exploration signals without changing intrinsic quality. After ten effective administrator feedback samples, a regularized model begins influencing ranking at 5%; its influence grows gradually and remains bounded by the agreed confidence schedule.
