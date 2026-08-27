@@ -6,7 +6,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "wrangler dev --test-scheduled",
-    "deploy": "wrangler deploy",
+    "deploy": "node scripts/check-production-config.mjs && wrangler deploy",
     "deploy:dry": "wrangler deploy --dry-run",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "fast-xml-parser": "^5.3.1",
-    "hono": "^4.13.5"
+    "hono": "^4.13.5",
+    "jose": "^6.2.10"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260826.1",

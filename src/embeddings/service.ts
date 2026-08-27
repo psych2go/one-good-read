@@ -1,5 +1,6 @@
 import { embeddingProvider } from "./index";
 import { projectVector } from "./math";
+import { storageUsage } from "../operations/storage";
 
 export interface StoredEmbedding {
   articleId: string;
@@ -28,8 +29,13 @@ export async function createAndStoreEmbedding(env: Env, input: { articleId: stri
       console.warn(JSON.stringify({ event: "vectorize_upsert_failed", articleId: input.articleId, message: error instanceof Error ? error.message : String(error) }));
     }
   }
-  await env.DB.prepare(`INSERT INTO embeddings (id,article_id,embedding_version,provider,model,dimensions,vector_object_key,projection,indexed) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(article_id,embedding_version) DO NOTHING`)
-    .bind(crypto.randomUUID(), input.articleId, String(env.EMBEDDING_VERSION), result.provider, result.model, result.dimensions, key, JSON.stringify(projection), indexed ? 1 : 0).run();
+  const storedVector = JSON.stringify(result.values);
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO embeddings (id,article_id,embedding_version,provider,model,dimensions,vector_object_key,projection,indexed) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(article_id,embedding_version) DO NOTHING`)
+      .bind(crypto.randomUUID(), input.articleId, String(env.EMBEDDING_VERSION), result.provider, result.model, result.dimensions, key, JSON.stringify(projection), indexed ? 1 : 0),
+    env.DB.prepare(`INSERT INTO stored_objects (object_key,article_id,kind,size_bytes,created_at,deleted_at) VALUES (?,?,'embedding',?,CURRENT_TIMESTAMP,NULL) ON CONFLICT(object_key) DO UPDATE SET size_bytes=excluded.size_bytes,deleted_at=NULL`)
+      .bind(key, input.articleId, new TextEncoder().encode(storedVector).byteLength),
+  ]);
   return { articleId: input.articleId, embeddingVersion: String(env.EMBEDDING_VERSION), provider: result.provider, model: result.model, dimensions: result.dimensions, projection, indexed };
 }
 
@@ -53,7 +59,8 @@ export async function projectionMap(db: D1Database, articleIds: string[], embedd
 
 function vectorId(articleId: string, version: string): string { return `${version}:${articleId}`; }
 
-export async function backfillMissingEmbeddings(env: Env, limit = 50): Promise<{ processed: number; failed: number }> {
+export async function backfillMissingEmbeddings(env: Env, limit = 50): Promise<{ processed: number; failed: number; skipped?: boolean }> {
+  if ((await storageUsage(env)).level === "critical") return { processed: 0, failed: 0, skipped: true };
   const rows = await env.DB.prepare(`
     SELECT a.id,a.title,a.author,a.body_key,n.primary_theme
     FROM articles a

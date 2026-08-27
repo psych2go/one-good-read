@@ -46,6 +46,9 @@ Open `http://localhost:8787/admin`, run a source-specific or full backfill, then
 
 ## Production setup
 
+Dedicated D1, R2, and Vectorize resources have been provisioned. Remote migrations are applied. See `docs/production.md` for the remaining domain, Access, AI secret, and optional Email Sending configuration.
+
+
 1. Create D1, R2, Workflow resources, and a 384-dimensional cosine Vectorize index; then replace the placeholder D1 ID in `wrangler.jsonc`.
 
    ```bash
@@ -58,11 +61,15 @@ Open `http://localhost:8787/admin`, run a source-specific or full backfill, then
    npx wrangler secret put OPENAI_API_KEY
    ```
 
-4. Apply D1 migrations.
+4. Apply D1 migrations if new migrations have been added.
 5. Configure Cloudflare Access to protect `/admin/*` for the administrator account.
 6. Run `npm run check`, then deploy.
 
 The cron expression `30 16 * * *` runs at 00:30 Asia/Shanghai. The daily workflow gradually fills missing embeddings before selection; the admin can also run a dedicated 10-article embedding batch. The workflow publishes for the current Shanghai calendar date.
+
+## Retry, retention, and operations
+
+“Later” schedules the article after a 14-day cooldown and may be consumed by at most two distinct recommendation exposures. Recommendation bodies expire 90 days after publication. A 06:30 Asia/Shanghai health check records missing-publication, cleanup, and storage-pressure alerts; email is optional and disabled until a sending domain is onboarded.
 
 ## Semantic preference learning
 

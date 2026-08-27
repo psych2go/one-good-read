@@ -2,6 +2,7 @@ import { aiProvider } from "../ai";
 import { backfillMissingEmbeddings, createAndStoreEmbedding, projectionMap } from "../embeddings/service";
 import { getOrTrainPreferenceModel, loadActivePreferenceModel, predictPersonalFit } from "../preferences/model";
 import { semanticSignals } from "../preferences/semantic";
+import { sendOperationalAlert } from "../operations/alerts";
 import { contentRejectionReason } from "../domain/content-gate";
 import { diverseTop, passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
 import type { DiscoveredArticle, RankedCandidate } from "../domain/types";
@@ -19,6 +20,8 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
     const message = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({ event: "source_discovery_failed", sourceId, message }));
     await env.DB.prepare("UPDATE sources SET consecutive_failures=consecutive_failures+1, updated_at=? WHERE id=?").bind(new Date().toISOString(), sourceId).run();
+    const source = await env.DB.prepare("SELECT consecutive_failures,name FROM sources WHERE id=?").bind(sourceId).first<{ consecutive_failures: number; name: string }>();
+    if ((source?.consecutive_failures ?? 0) >= 7) await sendOperationalAlert(env, { dedupeKey: `source-failure:${sourceId}`, type: "source_failure", severity: "warning", subject: `${source?.name ?? sourceId} 连续抓取失败`, message: `${source?.name ?? sourceId} 已连续失败 ${source?.consecutive_failures ?? 0} 次。最近错误：${message}` });
     throw error;
   }
   const summary: IngestSummary = { sourceId, discovered: articles.length, analyzed: 0, rejected: 0, skipped: 0, errors: [] };
@@ -61,6 +64,7 @@ async function processArticle(env: Env, articleId: string, discovered: Discovere
   if (!passesQualityGate(analysis)) {
     await saveAnalysis(env.DB, analysis, now);
     await markRejected(env.DB, articleId, "below_quality_gate", now);
+    await env.DB.prepare("UPDATE stored_objects SET expires_at=datetime(?,'+7 days') WHERE article_id=? AND kind='article_body' AND deleted_at IS NULL").bind(now, articleId).run();
     return;
   }
   await saveAnalysis(env.DB, analysis, now);
@@ -114,6 +118,7 @@ export async function runDailySelection(env: Env, date: string, publishAt?: stri
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await failSelectionRun(env.DB, runId, message, new Date().toISOString());
+    await sendOperationalAlert(env, { dedupeKey: `selection-failed:${date}`, type: "selection_failed", severity: "critical", subject: `${date} 自动选文失败`, message });
     throw error;
   }
 }

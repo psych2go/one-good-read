@@ -20,6 +20,8 @@ Worker
   -> Archive and sitemap
   -> Access-protected admin routes
   -> Workflow triggers and private feedback
+  -> Access JWT verification
+  -> storage lifecycle and operational alerts
 ```
 
 ## Boundaries
@@ -42,6 +44,5 @@ Worker
 ## Production hardening still planned
 
 - Confirm a compliant free full-text discovery path for Bloomberg Money Stuff; the other allowlisted source groups now have adapters.
-- Validate Cloudflare Access JWTs inside the Worker as defense in depth.
-- Add email alerts, storage thresholds, and the 90-day R2 lifecycle cleanup.
+- Onboard the final domain in Cloudflare Access and Email Sending, then enable the already implemented bindings and variables.
 - Split large analysis artifacts from D1 into R2 before approaching the free D1 per-database limit.

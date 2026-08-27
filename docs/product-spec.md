@@ -62,3 +62,7 @@ Normalized full text is private. Raw HTML is not retained. Recommended article t
 ## Implemented semantic layer
 
 Qualified articles receive versioned full-text embeddings. Recent-reading similarity contributes connection and exploration signals without changing intrinsic quality. After ten effective administrator feedback samples, a regularized model begins influencing ranking at 5%; its influence grows gradually and remains bounded by the agreed confidence schedule.
+
+## Implemented retry and operations layer
+
+“Later” creates a 14-day retry window and can be consumed by at most two distinct recommendation exposures; duplicate feedback on the same exposure does not consume another retry. Recommended bodies receive a 90-day R2 expiry, rejected low-quality bodies a 7-day expiry, and superseded body versions expire immediately. A 06:30 Asia/Shanghai health job checks publication, cleans expired objects, monitors tracked storage, and records deduplicated operational alerts.

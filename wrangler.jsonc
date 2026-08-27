@@ -21,13 +21,19 @@
     "EMBEDDING_VERSION": "embedding-v1",
     "PREFERENCE_MODEL_VERSION": "ridge-v1",
     "SELECTION_VERSION": "selection-v2-semantic",
-    "ADMIN_EMAIL": "local@example.com"
+    "ADMIN_EMAIL": "local@example.com",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "ALERTS_ENABLED": "false",
+    "ALERT_TO_EMAIL": "",
+    "ALERT_FROM_EMAIL": "",
+    "R2_STORAGE_LIMIT_BYTES": "10000000000"
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "one-good-read",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "4ea72c4b-ded9-4c87-86ac-8bb849546acd",
       "migrations_dir": "migrations"
     }
   ],
@@ -56,7 +62,7 @@
     }
   ],
   "triggers": {
-    "crons": ["30 16 * * *"]
+    "crons": ["30 16 * * *", "30 22 * * *"]
   },
   "observability": {
     "enabled": true,

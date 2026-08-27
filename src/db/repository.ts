@@ -1,4 +1,5 @@
 import type { ArticleAnalysis, DiscoveredArticle, ExtractedArticle, FeedbackKind, RankedCandidate, RecommendationHistoryItem } from "../domain/types";
+import { retryDecision } from "../domain/retry";
 
 export interface ReadyArticleRow {
   id: string;
@@ -54,9 +55,16 @@ export async function saveExtracted(env: Env, articleId: string, article: Extrac
     httpMetadata: { contentType: "text/plain; charset=utf-8" },
     customMetadata: { source: article.sourceId, canonicalUrl: article.canonicalUrl },
   });
-  await env.DB.prepare(`
-    UPDATE articles SET title=?, author=?, published_at=?, access_state='free', rejection_reason=NULL, content_hash=?, body_key=?, word_count=?, reading_minutes=?, last_checked_at=?, updated_at=? WHERE id=?
-  `).bind(article.title, article.author, article.publishedAt ?? null, article.contentHash, key, article.wordCount, article.readingMinutes, now, now, articleId).run();
+  const sizeBytes = new TextEncoder().encode(article.text).byteLength;
+  const prior = await env.DB.prepare("SELECT body_key FROM articles WHERE id=?").bind(articleId).first<{ body_key: string | null }>();
+  const statements = [
+    env.DB.prepare(`UPDATE articles SET title=?, author=?, published_at=?, access_state='free', rejection_reason=NULL, content_hash=?, body_key=?, word_count=?, reading_minutes=?, last_checked_at=?, updated_at=? WHERE id=?`)
+      .bind(article.title, article.author, article.publishedAt ?? null, article.contentHash, key, article.wordCount, article.readingMinutes, now, now, articleId),
+    env.DB.prepare(`INSERT INTO stored_objects (object_key,article_id,kind,size_bytes,created_at,deleted_at) VALUES (?,?,'article_body',?,?,NULL) ON CONFLICT(object_key) DO UPDATE SET size_bytes=excluded.size_bytes,deleted_at=NULL`)
+      .bind(key, articleId, sizeBytes, now),
+  ];
+  if (prior?.body_key && prior.body_key !== key) statements.push(env.DB.prepare("UPDATE stored_objects SET expires_at=?,deleted_at=NULL WHERE object_key=?").bind(now, prior.body_key));
+  await env.DB.batch(statements);
   return key;
 }
 
@@ -90,7 +98,7 @@ export async function readyCandidates(db: D1Database, analysisVersion: string, e
     JOIN analyses n ON n.article_id = a.id AND n.analysis_version = ?
     LEFT JOIN embeddings e ON e.article_id=a.id AND e.embedding_version=?
     WHERE a.status='ready' AND a.access_state='free'
-      AND NOT EXISTS (SELECT 1 FROM recommendations r WHERE r.article_id=a.id AND r.status='published')
+      AND (NOT EXISTS (SELECT 1 FROM recommendations r WHERE r.article_id=a.id AND r.status='published') OR (a.retry_eligible_at IS NOT NULL AND datetime(a.retry_eligible_at) <= datetime('now') AND a.recommendation_retry_count BETWEEN 1 AND 2))
     ORDER BY n.intrinsic_score DESC, a.id ASC
     LIMIT ?
   `).bind(analysisVersion, embeddingVersion, limit).all<ReadyArticleRow>();
@@ -172,7 +180,8 @@ export async function publishRecommendation(input: {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(recommendation_date) DO NOTHING
     `).bind(recommendationId, input.date, input.winner.articleId, input.runId, input.whyWorthReading, input.whyToday, JSON.stringify(input.keywords), input.publishAt ?? input.now),
-    input.db.prepare("UPDATE articles SET status='recommended', updated_at=? WHERE id=?").bind(input.now, input.winner.articleId),
+    input.db.prepare("UPDATE articles SET status='recommended', retry_eligible_at=NULL, updated_at=? WHERE id=?").bind(input.now, input.winner.articleId),
+    input.db.prepare("UPDATE stored_objects SET expires_at=datetime(?,'+90 days') WHERE article_id=? AND kind='article_body' AND deleted_at IS NULL").bind(input.publishAt ?? input.now, input.winner.articleId),
     input.db.prepare("UPDATE selection_runs SET status='complete', winner_article_id=?, completed_at=? WHERE id=?").bind(input.winner.articleId, input.now, input.runId),
   ]);
 }
@@ -181,8 +190,25 @@ export async function failSelectionRun(db: D1Database, runId: string, reason: st
   await db.prepare("UPDATE selection_runs SET status='failed', failure_reason=?, completed_at=? WHERE id=?").bind(reason, now, runId).run();
 }
 
-export async function addFeedback(db: D1Database, recommendationId: string, kind: FeedbackKind): Promise<void> {
-  await db.prepare("INSERT INTO feedback (id, recommendation_id, kind) VALUES (?, ?, ?)").bind(crypto.randomUUID(), recommendationId, kind).run();
+export async function addFeedback(db: D1Database, recommendationId: string, kind: FeedbackKind, now = new Date()): Promise<void> {
+  const recommendation = await db.prepare("SELECT article_id FROM recommendations WHERE id=?").bind(recommendationId).first<{ article_id: string }>();
+  if (!recommendation) throw new Error("Recommendation not found");
+  const [article, previous, previousLater] = await Promise.all([
+    db.prepare("SELECT recommendation_retry_count FROM articles WHERE id=?").bind(recommendation.article_id).first<{ recommendation_retry_count: number }>(),
+    db.prepare("SELECT kind FROM feedback WHERE recommendation_id=? ORDER BY created_at DESC LIMIT 1").bind(recommendationId).first<{ kind: FeedbackKind }>(),
+    db.prepare("SELECT created_at FROM feedback WHERE recommendation_id=? AND kind='later' ORDER BY created_at ASC LIMIT 1").bind(recommendationId).first<{ created_at: string }>(),
+  ]);
+  if (!article) throw new Error("Article not found");
+  const statements = [db.prepare("INSERT INTO feedback (id, recommendation_id, kind, created_at) VALUES (?, ?, ?, ?)").bind(crypto.randomUUID(), recommendationId, kind, now.toISOString())];
+  const decision = retryDecision({ currentCount: article.recommendation_retry_count, kind, previousKind: previous?.kind, previouslyRequested: Boolean(previousLater), now });
+  if (decision.action === "enable") {
+    const increment = decision.increment ? 1 : 0;
+    statements.push(db.prepare("UPDATE articles SET status='ready',recommendation_retry_count=recommendation_retry_count+?,retry_eligible_at=?,updated_at=? WHERE id=?").bind(increment, decision.eligibleAt ?? null, now.toISOString(), recommendation.article_id));
+  } else if (decision.action === "disable") {
+    statements.push(db.prepare("UPDATE articles SET status='recommended',retry_eligible_at=NULL,updated_at=? WHERE id=?").bind(now.toISOString(), recommendation.article_id));
+  }
+
+  await db.batch(statements);
 }
 
 export async function stableArticleId(url: string): Promise<string> {
