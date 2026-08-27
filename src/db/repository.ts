@@ -1,5 +1,6 @@
 import type { ArticleAnalysis, DiscoveredArticle, ExtractedArticle, FeedbackKind, RankedCandidate, RecommendationHistoryItem } from "../domain/types";
 import { retryDecision } from "../domain/retry";
+import { consecutiveDateStreak } from "../domain/simulation";
 
 export interface ReadyArticleRow {
   id: string;
@@ -87,7 +88,7 @@ export async function saveAnalysis(db: D1Database, analysis: ArticleAnalysis, no
   await db.prepare("UPDATE articles SET status='ready', updated_at=? WHERE id=?").bind(now, analysis.articleId).run();
 }
 
-export async function readyCandidates(db: D1Database, analysisVersion: string, embeddingVersion: string, limit = 250): Promise<ReadyArticleRow[]> {
+export async function readyCandidates(db: D1Database, analysisVersion: string, embeddingVersion: string, limit = 250, simulation = false): Promise<ReadyArticleRow[]> {
   const result = await db.prepare(`
     SELECT a.id, a.source_id, a.canonical_url, a.title, a.author, a.published_at, a.reading_minutes, a.word_count, e.projection,
       n.analysis_version, n.provider, n.model, n.intrinsic_score, n.long_term_value, n.idea_density,
@@ -99,9 +100,10 @@ export async function readyCandidates(db: D1Database, analysisVersion: string, e
     LEFT JOIN embeddings e ON e.article_id=a.id AND e.embedding_version=?
     WHERE a.status='ready' AND a.access_state='free'
       AND (NOT EXISTS (SELECT 1 FROM recommendations r WHERE r.article_id=a.id AND r.status='published') OR (a.retry_eligible_at IS NOT NULL AND datetime(a.retry_eligible_at) <= datetime('now') AND a.recommendation_retry_count BETWEEN 1 AND 2))
+      AND (?=0 OR NOT EXISTS (SELECT 1 FROM simulation_recommendations sr WHERE sr.article_id=a.id))
     ORDER BY n.intrinsic_score DESC, a.id ASC
     LIMIT ?
-  `).bind(analysisVersion, embeddingVersion, limit).all<ReadyArticleRow>();
+  `).bind(analysisVersion, embeddingVersion, simulation ? 1 : 0, limit).all<ReadyArticleRow>();
   return result.results;
 }
 
@@ -130,14 +132,17 @@ export function rowToAnalysis(row: ReadyArticleRow): ArticleAnalysis {
   };
 }
 
-export async function recommendationHistory(db: D1Database, limit = 60): Promise<RecommendationHistoryItem[]> {
+export async function recommendationHistory(db: D1Database, limit = 60, includeSimulation = false): Promise<RecommendationHistoryItem[]> {
+  const simulationUnion = includeSimulation ? `UNION ALL SELECT simulation_date AS date,article_id,created_at AS sort_at FROM simulation_recommendations` : "";
   const result = await db.prepare(`
-    SELECT r.recommendation_date AS date, a.id AS articleId, a.author, n.primary_theme AS primaryTheme
-    FROM recommendations r
-    JOIN articles a ON a.id=r.article_id
+    SELECT h.date, a.id AS articleId, a.author, n.primary_theme AS primaryTheme
+    FROM (
+      SELECT recommendation_date AS date,article_id,published_at AS sort_at FROM recommendations WHERE status='published' AND datetime(published_at) <= datetime('now')
+      ${simulationUnion}
+    ) h
+    JOIN articles a ON a.id=h.article_id
     JOIN analyses n ON n.id=(SELECT n2.id FROM analyses n2 WHERE n2.article_id=a.id ORDER BY n2.created_at DESC LIMIT 1)
-    WHERE r.status='published' AND datetime(r.published_at) <= datetime('now')
-    ORDER BY r.recommendation_date DESC
+    ORDER BY h.date DESC,h.sort_at DESC
     LIMIT ?
   `).bind(limit).all<{ date: string; articleId: string; author: string; primaryTheme: string }>();
   return result.results;
@@ -184,6 +189,30 @@ export async function publishRecommendation(input: {
     input.db.prepare("UPDATE stored_objects SET expires_at=datetime(?,'+90 days') WHERE article_id=? AND kind='article_body' AND deleted_at IS NULL").bind(input.publishAt ?? input.now, input.winner.articleId),
     input.db.prepare("UPDATE selection_runs SET status='complete', winner_article_id=?, completed_at=? WHERE id=?").bind(input.winner.articleId, input.now, input.runId),
   ]);
+}
+
+export async function saveSimulationRecommendation(input: {
+  db: D1Database;
+  date: string;
+  runId: string;
+  winner: RankedCandidate;
+  whyWorthReading: string;
+  whyToday: string;
+  keywords: string[];
+  now: string;
+  requiredDays: number;
+}): Promise<{ totalDays: number; consecutiveDays: number; ready: boolean }> {
+  await input.db.batch([
+    input.db.prepare(`INSERT INTO simulation_recommendations (simulation_date,article_id,selection_run_id,why_worth_reading,why_today,public_keywords,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(simulation_date) DO NOTHING`)
+      .bind(input.date, input.winner.articleId, input.runId, input.whyWorthReading, input.whyToday, JSON.stringify(input.keywords), input.now),
+    input.db.prepare("UPDATE selection_runs SET status='complete',winner_article_id=?,completed_at=? WHERE id=?").bind(input.winner.articleId, input.now, input.runId),
+  ]);
+  const rows = await input.db.prepare("SELECT simulation_date FROM simulation_recommendations ORDER BY simulation_date DESC").all<{ simulation_date: string }>();
+  const consecutiveDays = consecutiveDateStreak(rows.results.map((row) => row.simulation_date));
+  const status = { totalDays: rows.results.length, consecutiveDays, ready: consecutiveDays >= input.requiredDays, latestDate: input.date, updatedAt: input.now };
+  await input.db.prepare("INSERT INTO system_state (key,value,updated_at) VALUES ('simulation_status',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP")
+    .bind(JSON.stringify(status)).run();
+  return { totalDays: status.totalDays, consecutiveDays: status.consecutiveDays, ready: status.ready };
 }
 
 export async function failSelectionRun(db: D1Database, runId: string, reason: string, now: string): Promise<void> {

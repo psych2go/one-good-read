@@ -6,7 +6,7 @@ import { sendOperationalAlert } from "../operations/alerts";
 import { contentRejectionReason } from "../domain/content-gate";
 import { diverseTop, passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
 import type { DiscoveredArticle, RankedCandidate } from "../domain/types";
-import { annotateSelectionRun, createSelectionRun, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, upsertDiscovered, markRejected } from "../db/repository";
+import { annotateSelectionRun, createSelectionRun, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, saveSimulationRecommendation, upsertDiscovered, markRejected } from "../db/repository";
 import { sourceAdapter, sourceAdapters } from "../sources";
 
 export interface IngestSummary { sourceId: string; discovered: number; analyzed: number; rejected: number; skipped: number; errors: string[]; }
@@ -71,14 +71,33 @@ async function processArticle(env: Env, articleId: string, discovered: Discovere
   await createAndStoreEmbedding(env, { articleId, title: extracted.title, author: extracted.author, primaryTheme: analysis.primaryTheme, text: extracted.text });
 }
 
+interface PreparedDailyChoice { runId: string; winner: RankedCandidate; whyWorthReading: string; whyToday: string; keywords: string[]; }
+
 export async function runDailySelection(env: Env, date: string, publishAt?: string): Promise<{ winnerArticleId: string; runId: string }> {
   const existing = await env.DB.prepare("SELECT article_id FROM recommendations WHERE recommendation_date=? AND status='published'").bind(date).first<{ article_id: string }>();
   if (existing) return { winnerArticleId: existing.article_id, runId: "existing" };
+  const prepared = await prepareDailyChoice(env, date, false);
+  await publishRecommendation({ db: env.DB, date, runId: prepared.runId, winner: prepared.winner, whyWorthReading: prepared.whyWorthReading, whyToday: prepared.whyToday, keywords: prepared.keywords, now: new Date().toISOString(), publishAt });
+  return { winnerArticleId: prepared.winner.articleId, runId: prepared.runId };
+}
 
+export async function runDailySimulation(env: Env, date: string): Promise<{ status: "skipped" | "existing" | "completed"; readyCount: number; winnerArticleId?: string; runId?: string; consecutiveDays?: number }> {
+  const existing = await env.DB.prepare("SELECT article_id,selection_run_id FROM simulation_recommendations WHERE simulation_date=?").bind(date).first<{ article_id: string; selection_run_id: string }>();
+  if (existing) return { status: "existing", readyCount: await readyCount(env.DB), winnerArticleId: existing.article_id, runId: existing.selection_run_id };
+  const count = await readyCount(env.DB);
+  const target = Number(env.RESERVOIR_TARGET);
+  if (count < target) return { status: "skipped", readyCount: count };
+  const prepared = await prepareDailyChoice(env, date, true);
+  const simulation = await saveSimulationRecommendation({ db: env.DB, date, runId: prepared.runId, winner: prepared.winner, whyWorthReading: prepared.whyWorthReading, whyToday: prepared.whyToday, keywords: prepared.keywords, now: new Date().toISOString(), requiredDays: Number(env.SIMULATION_DAYS_REQUIRED) });
+  if (simulation.ready) await sendOperationalAlert(env, { dedupeKey: "simulation-ready", type: "simulation_ready", severity: "warning", subject: "7天不公开模拟已完成", message: `模拟已连续完成 ${simulation.consecutiveDays} 天，共 ${simulation.totalDays} 天。可以开始上线前完成审计。` });
+  return { status: "completed", readyCount: count, winnerArticleId: prepared.winner.articleId, runId: prepared.runId, consecutiveDays: simulation.consecutiveDays };
+}
+
+async function prepareDailyChoice(env: Env, date: string, simulation: boolean): Promise<PreparedDailyChoice> {
   const runId = await createSelectionRun(env.DB, date, String(env.SELECTION_VERSION), String(env.ANALYSIS_VERSION));
   try {
     const preferencePromise = getOrTrainPreferenceModel(env).catch(async (error) => { console.error(JSON.stringify({ event: "preference_training_fallback", message: error instanceof Error ? error.message : String(error) })); return loadActivePreferenceModel(env.DB, String(env.PREFERENCE_MODEL_VERSION), String(env.EMBEDDING_VERSION)); });
-    const [rows, history, preferenceModel] = await Promise.all([readyCandidates(env.DB, String(env.ANALYSIS_VERSION), String(env.EMBEDDING_VERSION)), recommendationHistory(env.DB), preferencePromise]);
+    const [rows, history, preferenceModel] = await Promise.all([readyCandidates(env.DB, String(env.ANALYSIS_VERSION), String(env.EMBEDDING_VERSION), 250, simulation), recommendationHistory(env.DB, 60, simulation), preferencePromise]);
     await annotateSelectionRun(env.DB, runId, String(env.EMBEDDING_VERSION), preferenceModel?.id);
     const historyProjections = await projectionMap(env.DB, history.map((item) => item.articleId), String(env.EMBEDDING_VERSION));
     const recentVectors = history.slice(0, 7).flatMap((item) => { const vector = historyProjections.get(item.articleId); return vector ? [vector] : []; });
@@ -98,7 +117,6 @@ export async function runDailySelection(env: Env, date: string, publishAt?: stri
     })).filter((candidate) => candidate.authorPenalty < 100)), 10);
     if (!ranked.length) throw new Error("No eligible candidates passed the quality and diversity gates");
     await saveCandidateSnapshot(env.DB, runId, ranked);
-
     const verified = await firstReachable(ranked);
     if (!verified.length) throw new Error("All Top candidates failed the publication link check");
     const provider = aiProvider(env);
@@ -110,18 +128,19 @@ export async function runDailySelection(env: Env, date: string, publishAt?: stri
       const decision = await provider.choose(verified, recentSummary);
       winner = verified.find((candidate) => candidate.articleId === decision.articleId) ?? winner;
     } catch (error) {
-      console.error(JSON.stringify({ event: "editor_choice_fallback", message: error instanceof Error ? error.message : String(error) }));
+      console.error(JSON.stringify({ event: "editor_choice_fallback", simulation, message: error instanceof Error ? error.message : String(error) }));
     }
     const copy = await provider.writeRecommendation(winner, recentSummary);
-    await publishRecommendation({ db: env.DB, date, runId, winner, whyWorthReading: copy.whyWorthReading, whyToday: copy.whyToday, keywords: copy.keywords, now: new Date().toISOString(), publishAt });
-    return { winnerArticleId: winner.articleId, runId };
+    return { runId, winner, whyWorthReading: copy.whyWorthReading, whyToday: copy.whyToday, keywords: copy.keywords };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await failSelectionRun(env.DB, runId, message, new Date().toISOString());
-    await sendOperationalAlert(env, { dedupeKey: `selection-failed:${date}`, type: "selection_failed", severity: "critical", subject: `${date} 自动选文失败`, message });
+    await sendOperationalAlert(env, { dedupeKey: `${simulation ? "simulation" : "selection"}-failed:${date}`, type: simulation ? "simulation_failed" : "selection_failed", severity: "critical", subject: `${date} ${simulation ? "模拟" : "自动"}选文失败`, message });
     throw error;
   }
 }
+
+async function readyCount(db: D1Database): Promise<number> { const row = await db.prepare("SELECT count(*) count FROM articles WHERE status='ready'").first<{ count: number }>(); return row?.count ?? 0; }
 
 async function firstReachable(candidates: RankedCandidate[]): Promise<RankedCandidate[]> {
   const reachable: RankedCandidate[] = [];

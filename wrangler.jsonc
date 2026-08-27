@@ -34,7 +34,9 @@
     "BACKFILL_ENABLED": "true",
     "RESERVOIR_TARGET": "300",
     "RESERVOIR_BATCH_SIZE": "1",
-    "RESERVOIR_SOURCES_PER_RUN": "4"
+    "RESERVOIR_SOURCES_PER_RUN": "4",
+    "SIMULATION_ENABLED": "true",
+    "SIMULATION_DAYS_REQUIRED": "7"
   },
   "d1_databases": [
     {
@@ -72,6 +74,11 @@
       "binding": "RESERVOIR_WORKFLOW",
       "name": "one-good-read-reservoir",
       "class_name": "ReservoirWorkflow"
+    },
+    {
+      "binding": "SIMULATION_WORKFLOW",
+      "name": "one-good-read-simulation",
+      "class_name": "SimulationWorkflow"
     }
   ],
   "triggers": {

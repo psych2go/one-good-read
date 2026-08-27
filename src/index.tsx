@@ -16,8 +16,9 @@ import { runBackfillHealthCheck, runOperationalHealthCheck } from "./operations/
 import { cleanupExpiredObjects, storageUsage } from "./operations/storage";
 import { DailyReadingWorkflow } from "./workflows/daily";
 import { ReservoirWorkflow } from "./workflows/reservoir";
+import { SimulationWorkflow } from "./workflows/simulation";
 
-export { BackfillWorkflow, DailyReadingWorkflow, ReservoirWorkflow };
+export { BackfillWorkflow, DailyReadingWorkflow, ReservoirWorkflow, SimulationWorkflow };
 
 type AppBindings = { Bindings: Env };
 const app = new Hono<AppBindings>();
@@ -54,7 +55,7 @@ app.use("/admin/*", async (c, next) => {
   await next();
 });
 app.get("/admin/", async (c) => {
-  const [articleCounts, sources, runs, recommendations, embeddingCount, preferenceModel, storage, alerts, reservoir] = await Promise.all([
+  const [articleCounts, sources, runs, recommendations, embeddingCount, preferenceModel, storage, alerts, reservoir, simulation, simulationRows] = await Promise.all([
     c.env.DB.prepare(`SELECT count(*) articles, sum(CASE WHEN status='ready' THEN 1 ELSE 0 END) ready, sum(CASE WHEN status='analysis_failed' THEN 1 ELSE 0 END) failures FROM articles`).first<{ articles: number; ready: number; failures: number }>(),
     c.env.DB.prepare("SELECT id,name,status,last_scanned_at,consecutive_failures FROM sources ORDER BY name").all<{ id: string; name: string; status: string; last_scanned_at: string | null; consecutive_failures: number }>(),
     c.env.DB.prepare(`SELECT s.id,s.recommendation_date,s.status,a.title winner_title,s.failure_reason,s.created_at FROM selection_runs s LEFT JOIN articles a ON a.id=s.winner_article_id ORDER BY s.created_at DESC LIMIT 20`).all<{ id: string; recommendation_date: string; status: string; winner_title: string | null; failure_reason: string | null; created_at: string }>(),
@@ -64,9 +65,11 @@ app.get("/admin/", async (c) => {
     storageUsage(c.env),
     c.env.DB.prepare("SELECT alert_type,severity,subject,delivery_status,created_at FROM alerts ORDER BY created_at DESC LIMIT 10").all<{ alert_type: string; severity: string; subject: string; delivery_status: string; created_at: string }>(),
     c.env.DB.prepare("SELECT value,updated_at FROM system_state WHERE key='reservoir_status'").first<{ value: string; updated_at: string }>(),
+    c.env.DB.prepare("SELECT value,updated_at FROM system_state WHERE key='simulation_status'").first<{ value: string; updated_at: string }>(),
+    c.env.DB.prepare("SELECT sr.simulation_date,a.title,a.author,sr.created_at FROM simulation_recommendations sr JOIN articles a ON a.id=sr.article_id ORDER BY sr.simulation_date DESC LIMIT 10").all<{ simulation_date: string; title: string; author: string; created_at: string }>(),
   ]);
   const recCount = await c.env.DB.prepare("SELECT count(*) count FROM recommendations WHERE status='published'").first<{ count: number }>();
-  return c.html(<AdminPage data={{ counts: { articles: articleCounts?.articles ?? 0, ready: articleCounts?.ready ?? 0, recommendations: recCount?.count ?? 0, failures: articleCounts?.failures ?? 0, embeddings: embeddingCount?.count ?? 0 }, preferenceModel: preferenceModel ?? undefined, storage, alerts: alerts.results, reservoir: reservoir ?? undefined, sources: sources.results, runs: runs.results, recommendations: recommendations.results }} />);
+  return c.html(<AdminPage data={{ counts: { articles: articleCounts?.articles ?? 0, ready: articleCounts?.ready ?? 0, recommendations: recCount?.count ?? 0, failures: articleCounts?.failures ?? 0, embeddings: embeddingCount?.count ?? 0 }, preferenceModel: preferenceModel ?? undefined, storage, alerts: alerts.results, reservoir: reservoir ?? undefined, simulation: simulation ?? undefined, simulationRows: simulationRows.results, sources: sources.results, runs: runs.results, recommendations: recommendations.results }} />);
 });
 app.post("/admin/run-daily", async (c) => {
   const date = shanghaiDate();
@@ -79,6 +82,11 @@ app.post("/admin/backfill", async (c) => {
 });
 app.post("/admin/run-reservoir", async (c) => {
   await c.env.RESERVOIR_WORKFLOW.create({ id: `reservoir-manual-${crypto.randomUUID()}`, params: {}, retention: { successRetention: "3 days", errorRetention: "3 days" } });
+  return c.redirect("/admin/", 303);
+});
+app.post("/admin/run-simulation", async (c) => {
+  const date = shanghaiDate();
+  await c.env.SIMULATION_WORKFLOW.create({ id: `simulation-manual-${date}-${crypto.randomUUID()}`, params: { date, deferSelection: false }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
   return c.redirect("/admin/", 303);
 });
 app.post("/admin/backfill-embeddings", async (c) => {
@@ -137,19 +145,26 @@ export default {
       if (String(env.BACKFILL_ENABLED) === "true") ctx.waitUntil(runBackfillHealthCheck(env));
       return;
     }
-    if (String(env.AUTOMATION_ENABLED) !== "true") {
-      console.log(JSON.stringify({ event: "automation_disabled", cron: controller.cron }));
-      return;
-    }
     if (controller.cron === "30 22 * * *") {
-      ctx.waitUntil(runOperationalHealthCheck(env));
+      if (String(env.AUTOMATION_ENABLED) === "true") ctx.waitUntil(runOperationalHealthCheck(env));
       return;
     }
     const date = shanghaiDate();
-    ctx.waitUntil((async () => {
-      try { await env.DAILY_WORKFLOW.create({ id: `daily-${date}`, params: { date, scan: true, deferPublication: true }, retention: { successRetention: "3 days", errorRetention: "3 days" } }); }
-      catch (error) { console.log(JSON.stringify({ event: "scheduled_workflow_existing", date, message: error instanceof Error ? error.message : String(error) })); }
-    })());
+    if (String(env.AUTOMATION_ENABLED) === "true") {
+      ctx.waitUntil((async () => {
+        try { await env.DAILY_WORKFLOW.create({ id: `daily-${date}`, params: { date, scan: true, deferPublication: true }, retention: { successRetention: "3 days", errorRetention: "3 days" } }); }
+        catch (error) { console.log(JSON.stringify({ event: "scheduled_workflow_existing", date, message: error instanceof Error ? error.message : String(error) })); }
+      })());
+      return;
+    }
+    if (String(env.SIMULATION_ENABLED) === "true") {
+      ctx.waitUntil((async () => {
+        try { await env.SIMULATION_WORKFLOW.create({ id: `simulation-${date}`, params: { date, deferSelection: true }, retention: { successRetention: "10 days", errorRetention: "10 days" } }); }
+        catch (error) { console.log(JSON.stringify({ event: "simulation_workflow_existing", date, message: error instanceof Error ? error.message : String(error) })); }
+      })());
+      return;
+    }
+    console.log(JSON.stringify({ event: "automation_and_simulation_disabled", cron: controller.cron }));
   },
 } satisfies ExportedHandler<Env>;
 

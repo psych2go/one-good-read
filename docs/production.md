@@ -146,3 +146,18 @@ Stale coordination, six-hour stalls, or excessive failures create deduplicated D
 Reservoir source planning uses three exploitation slots and one exploration slot. Exploitation is ranked by a Bayesian-smoothed historical acceptance rate plus a small recency bonus; exploration selects the least-recently scanned source that still has pending work. Empty sources are considered only after all pending queues are exhausted.
 
 Every successful paginated scan persists its actual `history_pages` depth. This prevents a source from discovering page-two/page-three articles once and later scanning only page one, which previously caused a high-priority historical source to produce `analyzed=0`. The production fix was verified with Benedict Evans: page depth persisted at three, 60 items were rediscovered, one historical pending article was analyzed, and one new Ready candidate was produced.
+
+## Seven-day private simulation
+
+`one-good-read-simulation` is deployed but cannot create a simulated recommendation until the private Ready pool reaches `RESERVOIR_TARGET=300`.
+
+- `SIMULATION_ENABLED=true`
+- Required consecutive days: 7
+- Scheduled from the normal 00:30 Asia/Shanghai daily trigger while public automation is disabled.
+- Below 300 Ready articles, the Workflow exits at the gate without creating a selection run, simulation row, or public recommendation.
+- At or above 300, it waits until 05:30, runs the full Top-10/AI/editorial/link-check path, stores the winner only in `simulation_recommendations`, and leaves the article Ready and the public site unchanged.
+- Prior simulation winners are excluded from later simulation days and included in author/theme fatigue history.
+- A gap resets the consecutive-day streak.
+- Seven consecutive days set `simulation_status.ready=true` and create a private operational alert for final launch auditing.
+
+The production gate was verified with 52 Ready articles: the Workflow completed in one second with `status=skipped`; simulation rows and published recommendations both remained zero.
