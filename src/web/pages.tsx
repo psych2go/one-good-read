@@ -24,7 +24,7 @@ function RecommendationCard({ item }: { item: RecommendationPageRow }) {
 
 export function HomePage({ item, origin }: { item: RecommendationPageRow | null; origin: string }) {
   if (!item) return <Layout title="One Good Read" description="每天，从精选博客中自动选出一篇值得认真阅读的文章。" canonical={origin}>
-    <section class="empty-state"><p class="edition-label">ONE GOOD READ</p><h1>第一篇阅读正在准备中。</h1><p>系统会在候选池达到质量门槛后，于北京时间早上六点发布。</p></section>
+    <section class="empty-state"><p class="edition-label">ONE GOOD READ</p><h1>第一篇阅读正在准备中。</h1><p>候选池和生产自动化正在准备中。启用后，系统会在北京时间早上六点发布。</p></section>
   </Layout>;
   return <Layout title={`${item.title} — One Good Read`} description={item.why_worth_reading} canonical={`${origin}/read/${item.recommendation_date}`}><RecommendationCard item={item} /></Layout>;
 }

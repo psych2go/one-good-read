@@ -46,7 +46,7 @@ Open `http://localhost:8787/admin`, run a source-specific or full backfill, then
 
 ## Production setup
 
-Dedicated D1, R2, and Vectorize resources have been provisioned. Remote migrations are applied. See `docs/production.md` for the remaining domain, Access, AI secret, and optional Email Sending configuration.
+The production safe shell is live at `https://read.zhuying.fun`. Dedicated D1, R2, and Vectorize resources have been provisioned and remote migrations are applied. Automation remains disabled until Access and the production AI secret are configured. See `docs/production.md` for the remaining domain, Access, AI secret, and optional Email Sending configuration.
 
 
 1. Create D1, R2, Workflow resources, and a 384-dimensional cosine Vectorize index; then replace the placeholder D1 ID in `wrangler.jsonc`.

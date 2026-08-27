@@ -1,5 +1,9 @@
 # Production deployment
 
+## Current deployment
+
+The production safe shell is deployed at `https://read.zhuying.fun`. The public home page is available over HTTPS. `/admin` fails closed with HTTP 403 because the Access application audience has not been configured. Scheduled handlers are deployed but return immediately while `AUTOMATION_ENABLED=false`.
+
 ## Provisioned resources
 
 The Cloudflare account currently has dedicated One Good Read resources:
@@ -9,6 +13,14 @@ The Cloudflare account currently has dedicated One Good Read resources:
 - Vectorize: `one-good-read-articles`, 384 dimensions, cosine metric
 
 All D1 migrations through `0007_retry_storage_alerts.sql` have been applied remotely.
+
+## Remaining activation inputs
+
+- Cloudflare Access application audience (`ACCESS_AUD`) for `read.zhuying.fun`
+- production OpenAI API key stored with Wrangler Secrets
+- optional Email Sending domain onboarding
+
+After Access and AI are configured, set `AI_PROVIDER=openai`, `EMBEDDING_PROVIDER=openai`, and `AUTOMATION_ENABLED=true`, run the deployment safety check, and deploy again.
 
 ## Deployment safety gate
 

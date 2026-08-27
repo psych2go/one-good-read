@@ -36,7 +36,7 @@ app.get("/archive", async (c) => {
 app.get("/about", (c) => c.html(<AboutPage origin={String(c.env.APP_ORIGIN)} />));
 app.get("/health", async (c) => {
   const db = await c.env.DB.prepare("SELECT 1 ok").first<{ ok: number }>();
-  return c.json({ ok: db?.ok === 1, date: shanghaiDate(), analysisVersion: c.env.ANALYSIS_VERSION, selectionVersion: c.env.SELECTION_VERSION });
+  return c.json({ ok: db?.ok === 1, date: shanghaiDate(), analysisVersion: c.env.ANALYSIS_VERSION, selectionVersion: c.env.SELECTION_VERSION, automationEnabled: String(c.env.AUTOMATION_ENABLED) === "true" });
 });
 app.get("/sitemap.xml", async (c) => {
   const rows = await c.env.DB.prepare("SELECT recommendation_date FROM recommendations WHERE status='published' AND datetime(published_at) <= datetime('now') ORDER BY recommendation_date DESC LIMIT 5000").all<{ recommendation_date: string }>();
@@ -114,6 +114,10 @@ app.onError((error, c) => { console.error(JSON.stringify({ event: "request_error
 export default {
   fetch: app.fetch,
   async scheduled(controller, env, ctx) {
+    if (String(env.AUTOMATION_ENABLED) !== "true") {
+      console.log(JSON.stringify({ event: "automation_disabled", cron: controller.cron }));
+      return;
+    }
     if (controller.cron === "30 22 * * *") {
       ctx.waitUntil(runOperationalHealthCheck(env));
       return;
