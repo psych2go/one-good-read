@@ -20,12 +20,7 @@ export class OpenAiProvider implements AiProvider {
   }
 
   async analyze(article: ExtractedArticle, context: AnalysisContext): Promise<ArticleAnalysis> {
-    const blind = await this.callJson<BlindResult>(
-      "article_blind_analysis",
-      blindSchema,
-      "你是严谨的文章编辑。只根据正文盲评，不根据作者声誉。分数使用0到10。必须阅读全文，区分长期价值、思想密度、论证质量、原创性、表达结构。",
-      `正文：\n${article.text}`,
-    );
+    const blind = await this.analyzeBlindText(article.text);
     const contextual = await this.callJson<ContextResult>(
       "article_context_analysis",
       contextSchema,
@@ -75,23 +70,87 @@ export class OpenAiProvider implements AiProvider {
     }, "用简体中文写克制的推荐说明。不要总结全文，不提前讲完结论，不虚构用户状态，不把推荐写成事实背书。为什么值得读60-120字；为什么今天40-100字。", JSON.stringify({ recentSummary, winner: minimalCandidate(winner) }));
   }
 
+  private async analyzeBlindText(text: string): Promise<BlindResult> {
+    const chunks = chunkForAnalysis(text);
+    if (chunks.length === 1) return this.callJson<BlindResult>(
+      "article_blind_analysis",
+      blindSchema,
+      BLIND_SYSTEM_PROMPT,
+      `正文：\n${text}`,
+    );
+    const chunkResults: Array<{ index: number; characters: number; analysis: BlindResult }> = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index] ?? "";
+      const analysis = await this.callJson<BlindResult>(
+        "article_chunk_analysis",
+        blindSchema,
+        `${BLIND_SYSTEM_PROMPT} 这是长文的第 ${index + 1}/${chunks.length} 段。只评估本段提供的思想与论证，证据必须来自本段。`,
+        `正文片段：\n${chunk}`,
+      );
+      chunkResults.push({ index, characters: chunk.length, analysis });
+    }
+    return this.callJson<BlindResult>(
+      "article_blind_synthesis",
+      blindSchema,
+      "你是长文总评编辑。根据所有分段分析形成整篇文章的盲评。不要机械平均；考虑观点如何跨段展开、重复、深化或受限。分数使用0到10，证据总结必须覆盖整篇，不得根据作者声誉。",
+      JSON.stringify({ totalCharacters: text.length, chunks: chunkResults }),
+    );
+  }
+
   private async callJson<T>(name: string, schema: Record<string, unknown>, system: string, input: string): Promise<T> {
-    const response = await fetch(apiEndpoint(this.baseUrl, "responses"), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.model,
-        input: [{ role: "system", content: [{ type: "input_text", text: system }] }, { role: "user", content: [{ type: "input_text", text: input }] }],
-        text: { format: { type: "json_schema", name, strict: true, schema } },
-      }),
-    });
-    if (!response.ok) throw new Error(`OpenAI response failed: ${response.status} ${await response.text()}`);
-    const payload = await response.json<{ output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> }>();
-    const outputText = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
-    if (!outputText) throw new Error("OpenAI response did not contain output_text");
-    return JSON.parse(outputText) as T;
+    let lastError = "unknown error";
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const response = await fetch(apiEndpoint(this.baseUrl, "responses"), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: this.model,
+            input: [{ role: "system", content: [{ type: "input_text", text: system }] }, { role: "user", content: [{ type: "input_text", text: input }] }],
+            text: { format: { type: "json_schema", name, strict: true, schema } },
+          }),
+          signal: AbortSignal.timeout(120_000),
+        });
+        if (!response.ok) {
+          const body = (await response.text()).slice(0, 1_000);
+          lastError = `${response.status} ${body}`;
+          if ((response.status === 429 || response.status >= 500) && attempt < 3) { await wait(attempt * 2_000); continue; }
+          throw new Error(`OpenAI-compatible response failed: ${lastError}`);
+        }
+        const payload = await response.json<{ output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> }>();
+        const outputText = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
+        if (!outputText) throw new Error("OpenAI-compatible response did not contain output_text");
+        return JSON.parse(outputText) as T;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        if (attempt < 3 && /timeout|network|fetch|429|5\d\d/i.test(lastError)) { await wait(attempt * 2_000); continue; }
+        throw error;
+      }
+    }
+    throw new Error(`OpenAI-compatible request failed after retries: ${lastError}`);
   }
 }
+
+const BLIND_SYSTEM_PROMPT = "你是严谨的文章编辑。只根据正文盲评，不根据作者声誉。分数使用0到10。必须阅读全文，区分长期价值、思想密度、论证质量、原创性、表达结构。";
+
+export function chunkForAnalysis(text: string, maxChars = 18_000, overlap = 500): string[] {
+  if (text.length <= maxChars) return [text];
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(text.length, start + maxChars);
+    if (end < text.length) {
+      const boundary = Math.max(text.lastIndexOf("\n", end), text.lastIndexOf(". ", end));
+      if (boundary > start + maxChars * .6) end = boundary + 1;
+    }
+    chunks.push(text.slice(start, end));
+    if (end >= text.length) break;
+    start = Math.max(start + 1, end - overlap);
+  }
+  return chunks;
+}
+
+function wait(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 
 interface BlindResult { longTermValue: number; ideaDensity: number; argumentQuality: number; originality: number; clarityStructure: number; confidence: number; evidence: string[]; riskNotes: string[]; }
 interface ContextResult { primaryTheme: string; secondaryThemes: string[]; keywords: string[]; confidence: number; contextSummary: string; }

@@ -100,3 +100,13 @@ The application tracks private object sizes in D1.
 - Daily publication remains operational.
 
 The configured free-plan safety limit is `10,000,000,000` bytes.
+
+## Production AI validation
+
+On August 27, 2026, the configured relay and model passed the remote production probe:
+
+- `gpt-5.6-luna` Responses structured output: passed
+- Cloudflare Workers AI 384-dimensional embedding: passed
+- Vectorize upsert and cleanup: passed
+
+Three initial articles were processed end to end. A subsequent controlled backfill produced 37 quality-qualified candidates across eight source groups. Long articles are now evaluated in overlapping full-text chunks, followed by a whole-article synthesis; 429, 5xx, network, and timeout failures receive up to three bounded attempts. Automation remains disabled until the 300-candidate and seven-day simulation gates are reached.

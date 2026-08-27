@@ -90,7 +90,7 @@ export async function extractMeta(html: string): Promise<Record<string, string>>
       },
     });
   await rewriter.transform(new Response(html)).arrayBuffer();
-  for (const key of Object.keys(meta)) meta[key] = normalizeText(meta[key] ?? "");
+  for (const key of Object.keys(meta)) meta[key] = normalizeText(decodeHtmlEntities(meta[key] ?? ""));
   return meta;
 }
 
@@ -111,13 +111,18 @@ export function stripHtmlFragment(html: string): { text: string; links: number }
     .replace(/<\/(?:p|div|li|blockquote|h[1-6])>/gi, "\n")
     .replace(/<br\s*\/?\s*>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&#(\d+);/g, (_match, value: string) => String.fromCodePoint(Number(value)))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, value: string) => String.fromCodePoint(Number.parseInt(value, 16)))
+;
+  return { text: normalizeText(decodeHtmlEntities(text)), links };
+}
+
+export function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&#(\d+);/g, (_match, number: string) => String.fromCodePoint(Number(number)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, number: string) => String.fromCodePoint(Number.parseInt(number, 16)))
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'");
-  return { text: normalizeText(text), links };
 }

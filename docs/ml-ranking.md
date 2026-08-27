@@ -56,3 +56,5 @@ The predicted value is bounded and converted to at most `0.9` additive rank poin
 Every trained model stores its feature version, embedding version, sample count, weights, mean squared error, training cutoff, and active status. Each selection run records the embedding version and preference-model ID it used.
 
 The configured Workers AI model was verified against the Cloudflare API on August 27, 2026: one input returned shape `[1, 384]` with `cls` pooling, matching the existing Vectorize index.
+
+Long-form blind analysis uses bounded overlapping text chunks and a final synthesis call, so large essays are fully read without relying on a single oversized relay request.
