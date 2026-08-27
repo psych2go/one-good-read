@@ -18,6 +18,8 @@ interface BackfillMonitorState { ready: number; failed: number; checkedAt: strin
 export async function runBackfillHealthCheck(env: Env): Promise<BackfillMonitorState> {
   const now = new Date();
   await env.DB.prepare("UPDATE sources SET backfill_locked_until=NULL WHERE backfill_locked_until IS NOT NULL AND datetime(backfill_locked_until) <= datetime('now')").run();
+  const cleanup = await cleanupExpiredObjects(env, 25);
+  if (cleanup.failed) await sendOperationalAlert(env, { dedupeKey: `backfill-cleanup-failed:${now.toISOString().slice(0, 10)}`, type: "cleanup_failed", severity: "warning", subject: "回填期间 R2 生命周期清理失败", message: `${cleanup.failed} 个过期对象删除失败；已成功删除 ${cleanup.deleted} 个。` });
   const [counts, previousRow, reservoirRow] = await Promise.all([
     env.DB.prepare(`SELECT sum(CASE WHEN status='ready' THEN 1 ELSE 0 END) ready,sum(CASE WHEN status='analysis_failed' THEN 1 ELSE 0 END) failed,sum(CASE WHEN status IN ('ready','rejected','analysis_failed') THEN 1 ELSE 0 END) processed FROM articles`).first<{ ready: number; failed: number; processed: number }>(),
     env.DB.prepare("SELECT value FROM system_state WHERE key='backfill_monitor'").first<{ value: string }>(),

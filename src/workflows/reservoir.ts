@@ -8,11 +8,12 @@ interface ReservoirPlan { readyTotal: number; target: number; selected: Array<{ 
 
 export class ReservoirWorkflow extends WorkflowEntrypoint<Env, ReservoirWorkflowParams> {
   override async run(event: Readonly<WorkflowEvent<ReservoirWorkflowParams>>, step: WorkflowStep): Promise<unknown> {
-    if (event.payload.monitor) return step.do("backfill-health-monitor", async () => runBackfillHealthCheck(this.env));
+    const payload = event.payload ?? {};
+    if (payload.monitor) return step.do("backfill-health-monitor", async () => runBackfillHealthCheck(this.env));
     await step.do("backfill-health-monitor", async () => runBackfillHealthCheck(this.env));
-    const target = Math.max(1, event.payload.target ?? Number(this.env.RESERVOIR_TARGET));
-    const batchSize = Math.max(1, Math.min(event.payload.batchSize ?? Number(this.env.RESERVOIR_BATCH_SIZE), 5));
-    const sourcesPerRun = Math.max(1, Math.min(event.payload.sourcesPerRun ?? Number(this.env.RESERVOIR_SOURCES_PER_RUN), 8));
+    const target = Math.max(1, payload.target ?? Number(this.env.RESERVOIR_TARGET));
+    const batchSize = Math.max(1, Math.min(payload.batchSize ?? Number(this.env.RESERVOIR_BATCH_SIZE), 5));
+    const sourcesPerRun = Math.max(1, Math.min(payload.sourcesPerRun ?? Number(this.env.RESERVOIR_SOURCES_PER_RUN), 8));
     const plan = await step.do("plan-reservoir-batch", async () => this.plan(target, batchSize, sourcesPerRun));
     if (!plan.selected.length) return { ...plan, instances: [], message: plan.readyTotal >= target ? "target_reached" : "no_available_sources" };
     const instances = await this.env.BACKFILL_WORKFLOW.createBatch(plan.selected.map((source) => ({

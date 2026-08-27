@@ -4,9 +4,10 @@ import { getOrTrainPreferenceModel, loadActivePreferenceModel, predictPersonalFi
 import { semanticSignals } from "../preferences/semantic";
 import { sendOperationalAlert } from "../operations/alerts";
 import { contentRejectionReason } from "../domain/content-gate";
+import { normalizeArticleUrl } from "../domain/url";
 import { diverseTop, passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
 import type { DiscoveredArticle, RankedCandidate } from "../domain/types";
-import { annotateSelectionRun, createSelectionRun, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, saveSimulationRecommendation, upsertDiscovered, markRejected } from "../db/repository";
+import { annotateSelectionRun, createSelectionRun, DuplicateContentError, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, saveSimulationRecommendation, upsertDiscovered, markRejected } from "../db/repository";
 import { sourceAdapter, sourceAdapters } from "../sources";
 
 export interface IngestSummary { sourceId: string; discovered: number; analyzed: number; rejected: number; skipped: number; errors: string[]; }
@@ -15,7 +16,13 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
   const adapter = sourceAdapter(sourceId);
   let articles: DiscoveredArticle[];
   try {
-    articles = await adapter.discover({ pages: discoveryPages });
+    const discovered = await adapter.discover({ pages: discoveryPages });
+    const unique = new Map<string, DiscoveredArticle>();
+    for (const article of discovered) {
+      const canonicalUrl = normalizeArticleUrl(article.canonicalUrl);
+      if (!unique.has(canonicalUrl)) unique.set(canonicalUrl, { ...article, canonicalUrl });
+    }
+    articles = [...unique.values()];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({ event: "source_discovery_failed", sourceId, message }));
@@ -58,7 +65,13 @@ async function processArticle(env: Env, articleId: string, discovered: Discovere
     await markRejected(env.DB, articleId, rejection, now);
     return;
   }
-  await saveExtracted(env, articleId, extracted, now);
+  try {
+    await saveExtracted(env, articleId, extracted, now);
+  } catch (error) {
+    if (!(error instanceof DuplicateContentError)) throw error;
+    await markRejected(env.DB, articleId, `duplicate_content:${error.existingArticleId}`, now);
+    return;
+  }
   const provider = aiProvider(env);
   const analysis = await provider.analyze(extracted, { articleId, analysisVersion: String(env.ANALYSIS_VERSION) });
   if (!passesQualityGate(analysis)) {

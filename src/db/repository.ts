@@ -1,6 +1,7 @@
 import type { ArticleAnalysis, DiscoveredArticle, ExtractedArticle, FeedbackKind, RankedCandidate, RecommendationHistoryItem } from "../domain/types";
 import { retryDecision } from "../domain/retry";
 import { consecutiveDateStreak } from "../domain/simulation";
+import { normalizeArticleUrl } from "../domain/url";
 
 export interface ReadyArticleRow {
   id: string;
@@ -32,7 +33,8 @@ export interface ReadyArticleRow {
 }
 
 export async function upsertDiscovered(db: D1Database, article: DiscoveredArticle, now: string): Promise<string> {
-  const id = await stableArticleId(article.canonicalUrl);
+  const canonicalUrl = normalizeArticleUrl(article.canonicalUrl);
+  const id = await stableArticleId(canonicalUrl);
   await db.prepare(`
     INSERT INTO articles (id, source_id, canonical_url, title, author, published_at, discovered_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -41,7 +43,7 @@ export async function upsertDiscovered(db: D1Database, article: DiscoveredArticl
       author = excluded.author,
       published_at = COALESCE(excluded.published_at, articles.published_at),
       updated_at = excluded.updated_at
-  `).bind(id, article.sourceId, article.canonicalUrl, article.title, article.author, article.publishedAt ?? null, now, now).run();
+  `).bind(id, article.sourceId, canonicalUrl, article.title, article.author, article.publishedAt ?? null, now, now).run();
   return id;
 }
 
@@ -50,7 +52,17 @@ export async function markRejected(db: D1Database, articleId: string, reason: st
     .bind(reason, now, now, articleId).run();
 }
 
+export class DuplicateContentError extends Error {
+  constructor(readonly existingArticleId: string) {
+    super(`Duplicate content already belongs to ${existingArticleId}`);
+    this.name = "DuplicateContentError";
+  }
+}
+
 export async function saveExtracted(env: Env, articleId: string, article: ExtractedArticle, now: string): Promise<string> {
+  const duplicate = await env.DB.prepare("SELECT id FROM articles WHERE content_hash=? AND id<>? LIMIT 1")
+    .bind(article.contentHash, articleId).first<{ id: string }>();
+  if (duplicate) throw new DuplicateContentError(duplicate.id);
   const key = `articles/${articleId}/${article.contentHash}.txt`;
   await env.CONTENT.put(key, article.text, {
     httpMetadata: { contentType: "text/plain; charset=utf-8" },
@@ -65,7 +77,17 @@ export async function saveExtracted(env: Env, articleId: string, article: Extrac
       .bind(key, articleId, sizeBytes, now),
   ];
   if (prior?.body_key && prior.body_key !== key) statements.push(env.DB.prepare("UPDATE stored_objects SET expires_at=?,deleted_at=NULL WHERE object_key=?").bind(now, prior.body_key));
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    const conflict = await env.DB.prepare("SELECT id FROM articles WHERE content_hash=? AND id<>? LIMIT 1")
+      .bind(article.contentHash, articleId).first<{ id: string }>();
+    if (conflict) {
+      await env.CONTENT.delete(key);
+      throw new DuplicateContentError(conflict.id);
+    }
+    throw error;
+  }
   return key;
 }
 
