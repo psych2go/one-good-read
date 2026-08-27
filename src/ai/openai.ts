@@ -1,4 +1,5 @@
 import { weightedIntrinsicScore } from "../domain/scoring";
+import { apiEndpoint } from "./base-url";
 import type { ArticleAnalysis, ExtractedArticle, PublicRecommendationCopy, RankedCandidate } from "../domain/types";
 import type { AiProvider, AnalysisContext } from "./provider";
 
@@ -6,7 +7,7 @@ const THEMES = ["工作与创造","创业与商业","投资与资本配置","风
 
 export class OpenAiProvider implements AiProvider {
   readonly name = "openai";
-  constructor(readonly model: string, private readonly apiKey: string) {}
+  constructor(readonly model: string, private readonly apiKey: string, private readonly baseUrl: string) {}
 
   async analyze(article: ExtractedArticle, context: AnalysisContext): Promise<ArticleAnalysis> {
     const blind = await this.callJson<BlindResult>(
@@ -65,7 +66,7 @@ export class OpenAiProvider implements AiProvider {
   }
 
   private async callJson<T>(name: string, schema: Record<string, unknown>, system: string, input: string): Promise<T> {
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetch(apiEndpoint(this.baseUrl, "responses"), {
       method: "POST",
       headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({

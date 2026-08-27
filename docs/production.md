@@ -46,8 +46,21 @@ The Worker validates `Cf-Access-Jwt-Assertion` against the team JWKS endpoint, e
 Set the production variables to the selected provider, then add the secret interactively:
 
 ```bash
-npx wrangler secret put OPENAI_API_KEY
+npx wrangler secret put AI_API_KEY
 ```
+
+For an OpenAI-compatible relay, configure:
+
+```jsonc
+"AI_PROVIDER": "openai-compatible",
+"AI_BASE_URL": "https://relay.example/v1",
+"AI_MODEL": "relay-response-model",
+"EMBEDDING_PROVIDER": "openai-compatible",
+"EMBEDDING_BASE_URL": "",
+"EMBEDDING_MODEL": "relay-embedding-model"
+```
+
+`AI_BASE_URL` is the API prefix, not the full `/responses` URL. The application appends `/responses` and `/embeddings`. Leave `EMBEDDING_BASE_URL` empty when both APIs share the same prefix. The relay must accept OpenAI Responses structured-output payloads; the semantic layer additionally needs an embeddings endpoint that supports the configured 384 dimensions. The same `AI_API_KEY` is used for both calls. `OPENAI_API_KEY` remains a temporary backward-compatible fallback.
 
 Secrets must never be stored in `wrangler.jsonc`, `.dev.vars.example`, or GitHub.
 

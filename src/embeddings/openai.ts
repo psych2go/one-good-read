@@ -1,9 +1,10 @@
 import { normalizeVector } from "./math";
+import { apiEndpoint } from "../ai/base-url";
 import type { EmbeddingProvider, EmbeddingResult } from "./provider";
 
 export class OpenAiEmbeddingProvider implements EmbeddingProvider {
   readonly provider = "openai";
-  constructor(readonly model: string, private readonly dimensions: number, private readonly apiKey: string) {}
+  constructor(readonly model: string, private readonly dimensions: number, private readonly apiKey: string, private readonly baseUrl: string) {}
 
   async embed(title: string, text: string): Promise<EmbeddingResult> {
     const chunks = chunkText(`${title}\n\n${text}`);
@@ -21,7 +22,7 @@ export class OpenAiEmbeddingProvider implements EmbeddingProvider {
   }
 
   private async embedBatch(inputs: string[]): Promise<number[][]> {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
+    const response = await fetch(apiEndpoint(this.baseUrl, "embeddings"), {
       method: "POST",
       headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: this.model, input: inputs, dimensions: this.dimensions, encoding_format: "float" }),

@@ -19,7 +19,7 @@ The repository now includes source adapters for:
 
 Bloomberg Money Stuff remains deferred until a compliant, stable, free full-text discovery path is confirmed.
 
-The local default uses a deterministic heuristic analyzer so the system can run without paid credentials. Production should set `AI_PROVIDER=openai` and store `OPENAI_API_KEY` as a Wrangler secret.
+The local default uses a deterministic heuristic analyzer so the system can run without paid credentials. Production can use OpenAI or an OpenAI-compatible relay. Set `AI_PROVIDER=openai-compatible`, configure the exact API prefix in `AI_BASE_URL`, and store `AI_API_KEY` as a Wrangler secret.
 
 ## Cloudflare services
 
@@ -58,7 +58,7 @@ The production safe shell is live at `https://read.zhuying.fun`. Dedicated D1, R
 3. Store the API key without committing it:
 
    ```bash
-   npx wrangler secret put OPENAI_API_KEY
+   npx wrangler secret put AI_API_KEY
    ```
 
 4. Apply D1 migrations if new migrations have been added.

@@ -4,7 +4,7 @@
 
 Each quality-qualified article receives a versioned embedding after full-text analysis.
 
-- Production provider: OpenAI-compatible embedding provider.
+- Production provider: configurable OpenAI-compatible embedding provider using `EMBEDDING_BASE_URL` or the shared `AI_BASE_URL`.
 - Local provider: deterministic feature hashing, used only for development and tests.
 - Full vector: 384 dimensions, private JSON object in R2 and upserted into Vectorize.
 - Daily projection: fixed 64-dimensional signed feature-hash projection in D1.
