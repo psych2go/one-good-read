@@ -140,3 +140,9 @@ A second hourly Cron runs at minute 45 while backfill is enabled. It records `ba
 - Backfill remains below the configured target.
 
 Stale coordination, six-hour stalls, or excessive failures create deduplicated D1 alerts. The initial production monitor completed in one second with 42 ready candidates, one failed article, no alerts, and no residual locks.
+
+## Reservoir acceptance prioritization
+
+Reservoir source planning uses three exploitation slots and one exploration slot. Exploitation is ranked by a Bayesian-smoothed historical acceptance rate plus a small recency bonus; exploration selects the least-recently scanned source that still has pending work. Empty sources are considered only after all pending queues are exhausted.
+
+Every successful paginated scan persists its actual `history_pages` depth. This prevents a source from discovering page-two/page-three articles once and later scanning only page one, which previously caused a high-priority historical source to produce `analyzed=0`. The production fix was verified with Benedict Evans: page depth persisted at three, 60 items were rediscovered, one historical pending article was analyzed, and one new Ready candidate was produced.

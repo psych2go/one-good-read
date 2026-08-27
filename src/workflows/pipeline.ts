@@ -44,8 +44,8 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
         .bind(message.slice(0, 500), new Date().toISOString(), id).run();
     }
   }
-  await env.DB.prepare("UPDATE sources SET last_scanned_at=?, consecutive_failures=?, updated_at=? WHERE id=?")
-    .bind(now, 0, now, sourceId).run();
+  await env.DB.prepare("UPDATE sources SET last_scanned_at=?, consecutive_failures=?, history_pages=max(history_pages,?), updated_at=? WHERE id=?")
+    .bind(now, 0, discoveryPages, now, sourceId).run();
   return summary;
 }
 

@@ -1,9 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { nextHistoryPages } from "../domain/reservoir";
+import { nextHistoryPages, selectReservoirSources } from "../domain/reservoir";
 import { runBackfillHealthCheck } from "../operations/health";
 
 export interface ReservoirWorkflowParams { target?: number; batchSize?: number; sourcesPerRun?: number; monitor?: boolean; }
-interface SourceBackfillRow { id: string; history_pages: number; pending: number; ready: number; last_scanned_at: string | null; }
+interface SourceBackfillRow { id: string; history_pages: number; pending: number; ready: number; rejected: number; last_scanned_at: string | null; }
 interface ReservoirPlan { readyTotal: number; target: number; selected: Array<{ sourceId: string; pages: number; limit: number }>; }
 
 export class ReservoirWorkflow extends WorkflowEntrypoint<Env, ReservoirWorkflowParams> {
@@ -35,15 +35,15 @@ export class ReservoirWorkflow extends WorkflowEntrypoint<Env, ReservoirWorkflow
     const rows = await this.env.DB.prepare(`
       SELECT s.id,s.history_pages,s.last_scanned_at,
         sum(CASE WHEN a.status IN ('discovered','analysis_failed') THEN 1 ELSE 0 END) pending,
-        sum(CASE WHEN a.status='ready' THEN 1 ELSE 0 END) ready
+        sum(CASE WHEN a.status='ready' THEN 1 ELSE 0 END) ready,
+        sum(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) rejected
       FROM sources s LEFT JOIN articles a ON a.source_id=s.id
       WHERE s.status='active' AND (s.backfill_locked_until IS NULL OR datetime(s.backfill_locked_until) <= datetime('now'))
       GROUP BY s.id,s.history_pages,s.last_scanned_at
-      ORDER BY CASE WHEN sum(CASE WHEN a.status IN ('discovered','analysis_failed') THEN 1 ELSE 0 END) > 0 THEN 0 ELSE 1 END,
-        coalesce(s.last_scanned_at,'') ASC, ready ASC, s.id ASC
-      LIMIT ?
-    `).bind(sourcesPerRun).all<SourceBackfillRow>();
-    const selected = rows.results.map((row) => ({ sourceId: row.id, pages: nextHistoryPages(row.history_pages, row.pending), limit: batchSize }));
+    `).all<SourceBackfillRow>();
+    const chosen = selectReservoirSources(rows.results.map((row) => ({ id: row.id, pending: row.pending, ready: row.ready, rejected: row.rejected, lastScannedAt: row.last_scanned_at ?? undefined })), sourcesPerRun);
+    const byId = new Map(rows.results.map((row) => [row.id, row]));
+    const selected = chosen.map((choice) => { const row = byId.get(choice.id); if (!row) throw new Error(`Reservoir source ${choice.id} disappeared`); return { sourceId: row.id, pages: nextHistoryPages(row.history_pages, row.pending), limit: batchSize }; });
     if (selected.length) {
       await this.env.DB.batch(selected.map((source) => this.env.DB.prepare("UPDATE sources SET history_pages=max(history_pages,?),backfill_locked_until=datetime('now','+2 hours') WHERE id=?").bind(source.pages, source.sourceId)));
     }
