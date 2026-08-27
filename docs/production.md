@@ -165,3 +165,14 @@ The production gate was verified with 52 Ready articles: the Workflow completed 
 ## Reservoir throughput tuning
 
 After multiple stable hourly cycles with zero analysis failures and no residual locks, the per-source batch size was increased from one to two while keeping source concurrency at four. A production validation processed eight articles across Benedict Evans, Paul Graham, Damodaran, and Astral Codex Ten: all child Workflows completed, the longest took two minutes, all locks cleared, no relay 5xx/timeouts occurred, and one article passed the quality gate.
+
+## Free-plan Cron consolidation
+
+The Cloudflare Free account permits five Cron triggers account-wide. An attempted six-trigger configuration was rejected with code `10072`; the existing schedules remained intact. The final Worker uses only four Cron schedules:
+
+- minute 15: Reservoir batch plus integrated backfill health monitor
+- minute 45: Reservoir batch plus integrated backfill health monitor
+- 16:30 UTC: daily publication or gated private simulation
+- 22:30 UTC: operational health/cleanup when public automation is enabled
+
+The integrated monitor runs as the first durable step of every Reservoir Workflow, preserving twice-hourly health checks without consuming additional Cron slots. The production validation batch processed eight articles, added six Ready candidates, completed all child Workflows, and released all locks.

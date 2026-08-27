@@ -9,6 +9,7 @@ interface ReservoirPlan { readyTotal: number; target: number; selected: Array<{ 
 export class ReservoirWorkflow extends WorkflowEntrypoint<Env, ReservoirWorkflowParams> {
   override async run(event: Readonly<WorkflowEvent<ReservoirWorkflowParams>>, step: WorkflowStep): Promise<unknown> {
     if (event.payload.monitor) return step.do("backfill-health-monitor", async () => runBackfillHealthCheck(this.env));
+    await step.do("backfill-health-monitor", async () => runBackfillHealthCheck(this.env));
     const target = Math.max(1, event.payload.target ?? Number(this.env.RESERVOIR_TARGET));
     const batchSize = Math.max(1, Math.min(event.payload.batchSize ?? Number(this.env.RESERVOIR_BATCH_SIZE), 5));
     const sourcesPerRun = Math.max(1, Math.min(event.payload.sourcesPerRun ?? Number(this.env.RESERVOIR_SOURCES_PER_RUN), 8));
