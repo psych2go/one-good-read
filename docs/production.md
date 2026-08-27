@@ -2,7 +2,7 @@
 
 ## Current deployment
 
-The production safe shell is deployed at `https://read.zhuying.fun`. The public home page is available over HTTPS. `/admin` fails closed with HTTP 403 because the Access application audience has not been configured. Scheduled handlers are deployed but return immediately while `AUTOMATION_ENABLED=false`.
+The production safe shell is deployed at `https://read.zhuying.fun`. The public home page is available over HTTPS. `/admin` redirects to `/admin/`, which is protected by the configured Cloudflare Access application. Scheduled handlers are deployed but return immediately while `AUTOMATION_ENABLED=false`.
 
 ## Provisioned resources
 
@@ -16,11 +16,10 @@ All D1 migrations through `0007_retry_storage_alerts.sql` have been applied remo
 
 ## Remaining activation inputs
 
-- Cloudflare Access application audience (`ACCESS_AUD`) for `read.zhuying.fun`
 - production OpenAI API key stored with Wrangler Secrets
 - optional Email Sending domain onboarding
 
-After Access and AI are configured, set `AI_PROVIDER=openai`, `EMBEDDING_PROVIDER=openai`, and `AUTOMATION_ENABLED=true`, run the deployment safety check, and deploy again.
+After the production AI secret is configured, set `AI_PROVIDER=openai`, `EMBEDDING_PROVIDER=openai`, and `AUTOMATION_ENABLED=true`, run the deployment safety check, and deploy again.
 
 ## Deployment safety gate
 
@@ -28,7 +27,7 @@ After Access and AI are configured, set `AI_PROVIDER=openai`, `EMBEDDING_PROVIDE
 
 - `APP_ORIGIN`: final HTTPS domain
 - `ADMIN_EMAIL`: administrator address
-- `ACCESS_TEAM_DOMAIN`: `https://<team>.cloudflareaccess.com`
+- `ACCESS_TEAM_DOMAIN`: `https://aaron-bjtu.cloudflareaccess.com`
 - `ACCESS_AUD`: Access application audience tag
 - production AI provider
 - production embedding provider

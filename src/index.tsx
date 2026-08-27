@@ -45,12 +45,13 @@ app.get("/sitemap.xml", async (c) => {
   return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((path) => `<url><loc>${escapeXml(`${origin}${path}`)}</loc></url>`).join("")}</urlset>`, 200, { "Content-Type": "application/xml; charset=utf-8" });
 });
 
+app.get("/admin", (c) => c.redirect("/admin/", 302));
 app.use("/admin/*", async (c, next) => {
   if (!await isAuthorizedAdmin(c.req.raw, c.env)) return c.text("Not authorized", 403);
   if (c.req.method !== "GET" && !sameOrigin(c.req.raw, String(c.env.APP_ORIGIN))) return c.text("Invalid origin", 403);
   await next();
 });
-app.get("/admin", async (c) => {
+app.get("/admin/", async (c) => {
   const [articleCounts, sources, runs, recommendations, embeddingCount, preferenceModel, storage, alerts] = await Promise.all([
     c.env.DB.prepare(`SELECT count(*) articles, sum(CASE WHEN status='ready' THEN 1 ELSE 0 END) ready, sum(CASE WHEN status='analysis_failed' THEN 1 ELSE 0 END) failures FROM articles`).first<{ articles: number; ready: number; failures: number }>(),
     c.env.DB.prepare("SELECT id,name,status,last_scanned_at,consecutive_failures FROM sources ORDER BY name").all<{ id: string; name: string; status: string; last_scanned_at: string | null; consecutive_failures: number }>(),
@@ -67,23 +68,23 @@ app.get("/admin", async (c) => {
 app.post("/admin/run-daily", async (c) => {
   const date = shanghaiDate();
   try { await c.env.DAILY_WORKFLOW.create({ id: `daily-${date}`, params: { date, scan: false, deferPublication: false }, retention: { successRetention: "3 days", errorRetention: "3 days" } }); } catch (error) { console.log(JSON.stringify({ event: "daily_workflow_existing", date, message: error instanceof Error ? error.message : String(error) })); }
-  return c.redirect("/admin", 303);
+  return c.redirect("/admin/", 303);
 });
 app.post("/admin/backfill", async (c) => {
   await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${crypto.randomUUID()}`, params: { limit: 25 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
-  return c.redirect("/admin", 303);
+  return c.redirect("/admin/", 303);
 });
 app.post("/admin/backfill-embeddings", async (c) => {
   await c.env.BACKFILL_WORKFLOW.create({ id: `embedding-backfill-${crypto.randomUUID()}`, params: { embeddingsOnly: true, limit: 10 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
-  return c.redirect("/admin", 303);
+  return c.redirect("/admin/", 303);
 });
 app.post("/admin/train-preference", async (c) => {
   await getOrTrainPreferenceModel(c.env);
-  return c.redirect("/admin", 303);
+  return c.redirect("/admin/", 303);
 });
 app.post("/admin/cleanup-storage", async (c) => {
   await cleanupExpiredObjects(c.env, 100);
-  return c.redirect("/admin", 303);
+  return c.redirect("/admin/", 303);
 });
 app.get("/admin/probe/:sourceId", async (c) => {
   const sourceId = c.req.param("sourceId");
@@ -98,14 +99,14 @@ app.post("/admin/backfill/:sourceId", async (c) => {
   const sourceId = c.req.param("sourceId");
   if (!adapterIds().includes(sourceId)) return c.text("Unknown source", 404);
   await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${sourceId}-${crypto.randomUUID()}`, params: { sourceId, limit: 5 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
-  return c.redirect("/admin", 303);
+  return c.redirect("/admin/", 303);
 });
 app.post("/admin/recommendations/:id/feedback", async (c) => {
   const body = await c.req.parseBody();
   const kind = body.kind;
   if (typeof kind !== "string" || !isFeedbackKind(kind)) return c.text("Invalid feedback", 400);
   await addFeedback(c.env.DB, c.req.param("id"), kind);
-  return c.redirect("/admin", 303);
+  return c.redirect("/admin/", 303);
 });
 
 app.notFound((c) => c.html(html`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><link rel="stylesheet" href="/styles.css"><title>Not found — One Good Read</title></head><body><main><section class="empty-state"><p class="edition-label">404</p><h1>这里没有今天的阅读。</h1><p><a href="/">返回首页</a></p></section></main></body></html>`, 404));
