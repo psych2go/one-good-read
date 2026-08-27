@@ -161,3 +161,7 @@ Every successful paginated scan persists its actual `history_pages` depth. This 
 - Seven consecutive days set `simulation_status.ready=true` and create a private operational alert for final launch auditing.
 
 The production gate was verified with 52 Ready articles: the Workflow completed in one second with `status=skipped`; simulation rows and published recommendations both remained zero.
+
+## Reservoir throughput tuning
+
+After multiple stable hourly cycles with zero analysis failures and no residual locks, the per-source batch size was increased from one to two while keeping source concurrency at four. A production validation processed eight articles across Benedict Evans, Paul Graham, Damodaran, and Astral Codex Ten: all child Workflows completed, the longest took two minutes, all locks cleared, no relay 5xx/timeouts occurred, and one article passed the quality gate.
