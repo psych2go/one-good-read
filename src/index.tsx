@@ -3,6 +3,7 @@ import { html } from "hono/html";
 import { addFeedback } from "./db/repository";
 import { archiveFacets, archiveRecommendations, latestRecommendation, recommendationByDate } from "./db/queries";
 import { shanghaiDate } from "./domain/date";
+import { reservoirInstanceId } from "./domain/cron";
 import type { FeedbackKind } from "./domain/types";
 import { AdminPage } from "./web/admin";
 import { AboutPage, ArchivePage, HomePage, ReadPage } from "./web/pages";
@@ -137,8 +138,8 @@ export default {
   async scheduled(controller, env, ctx) {
     if (["15 * * * *", "45 * * * *"].includes(controller.cron)) {
       if (String(env.BACKFILL_ENABLED) !== "true") return;
-      const hour = new Date().toISOString().slice(0, 13).replace(/[-T:]/g, "");
-      ctx.waitUntil((async () => { try { await env.RESERVOIR_WORKFLOW.create({ id: `reservoir-${hour}`, params: {}, retention: { successRetention: "3 days", errorRetention: "3 days" } }); } catch (error) { console.log(JSON.stringify({ event: "reservoir_workflow_existing", hour, message: error instanceof Error ? error.message : String(error) })); } })());
+      const instanceId = reservoirInstanceId(controller.scheduledTime);
+      ctx.waitUntil((async () => { try { await env.RESERVOIR_WORKFLOW.create({ id: instanceId, params: {}, retention: { successRetention: "3 days", errorRetention: "3 days" } }); } catch (error) { console.log(JSON.stringify({ event: "reservoir_workflow_existing", instanceId, message: error instanceof Error ? error.message : String(error) })); } })());
       return;
     }
     if (controller.cron === "30 22 * * *") {
