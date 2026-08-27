@@ -30,7 +30,11 @@
     "ALERT_TO_EMAIL": "",
     "ALERT_FROM_EMAIL": "",
     "R2_STORAGE_LIMIT_BYTES": "10000000000",
-    "AUTOMATION_ENABLED": "false"
+    "AUTOMATION_ENABLED": "false",
+    "BACKFILL_ENABLED": "true",
+    "RESERVOIR_TARGET": "300",
+    "RESERVOIR_BATCH_SIZE": "1",
+    "RESERVOIR_SOURCES_PER_RUN": "4"
   },
   "d1_databases": [
     {
@@ -63,10 +67,15 @@
       "binding": "BACKFILL_WORKFLOW",
       "name": "one-good-read-backfill",
       "class_name": "BackfillWorkflow"
+    },
+    {
+      "binding": "RESERVOIR_WORKFLOW",
+      "name": "one-good-read-reservoir",
+      "class_name": "ReservoirWorkflow"
     }
   ],
   "triggers": {
-    "crons": ["30 16 * * *", "30 22 * * *"]
+    "crons": ["15 * * * *", "30 16 * * *", "30 22 * * *"]
   },
   "workers_dev": false,
   "preview_urls": false,

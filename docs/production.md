@@ -114,3 +114,18 @@ Three initial articles were processed end to end. A subsequent controlled backfi
 ## Historical discovery pagination
 
 Production source discovery now supports WordPress feed pages, Blogger `start-index`, Squarespace RSS pages, and Substack archive metadata. Substack remains RSS-first: if the archive API returns 403/429 from a Worker egress IP, history expansion stops gracefully without blocking recent articles or leaving a Workflow in a long retry wait. Historical free posts fall back from the Substack post API to the public `.available-content` HTML body when needed.
+
+## Reservoir coordinator
+
+A dedicated `one-good-read-reservoir` Workflow runs at minute 15 of every hour while `BACKFILL_ENABLED=true`.
+
+- Target: 300 quality-qualified candidates.
+- Per hourly run: at most four sources.
+- Per selected source: one article.
+- Source lock: two hours, cleared by the managed child Workflow on completion.
+- Source rotation: prioritizes pending articles and least-recently scanned unlocked sources.
+- Historical depth expands by two pages only when a source has fewer than ten pending articles.
+- At 300 ready articles, the coordinator creates no more child Workflows.
+- Public recommendation automation remains separately controlled by `AUTOMATION_ENABLED` and is still disabled.
+
+The first production coordinator run planned four sources in two seconds, created four child Workflows, and increased the candidate pool while preventing duplicate analysis through D1 source locks.

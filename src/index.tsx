@@ -15,8 +15,9 @@ import { isAuthorizedAdmin } from "./security/access";
 import { runOperationalHealthCheck } from "./operations/health";
 import { cleanupExpiredObjects, storageUsage } from "./operations/storage";
 import { DailyReadingWorkflow } from "./workflows/daily";
+import { ReservoirWorkflow } from "./workflows/reservoir";
 
-export { BackfillWorkflow, DailyReadingWorkflow };
+export { BackfillWorkflow, DailyReadingWorkflow, ReservoirWorkflow };
 
 type AppBindings = { Bindings: Env };
 const app = new Hono<AppBindings>();
@@ -53,7 +54,7 @@ app.use("/admin/*", async (c, next) => {
   await next();
 });
 app.get("/admin/", async (c) => {
-  const [articleCounts, sources, runs, recommendations, embeddingCount, preferenceModel, storage, alerts] = await Promise.all([
+  const [articleCounts, sources, runs, recommendations, embeddingCount, preferenceModel, storage, alerts, reservoir] = await Promise.all([
     c.env.DB.prepare(`SELECT count(*) articles, sum(CASE WHEN status='ready' THEN 1 ELSE 0 END) ready, sum(CASE WHEN status='analysis_failed' THEN 1 ELSE 0 END) failures FROM articles`).first<{ articles: number; ready: number; failures: number }>(),
     c.env.DB.prepare("SELECT id,name,status,last_scanned_at,consecutive_failures FROM sources ORDER BY name").all<{ id: string; name: string; status: string; last_scanned_at: string | null; consecutive_failures: number }>(),
     c.env.DB.prepare(`SELECT s.id,s.recommendation_date,s.status,a.title winner_title,s.failure_reason,s.created_at FROM selection_runs s LEFT JOIN articles a ON a.id=s.winner_article_id ORDER BY s.created_at DESC LIMIT 20`).all<{ id: string; recommendation_date: string; status: string; winner_title: string | null; failure_reason: string | null; created_at: string }>(),
@@ -62,9 +63,10 @@ app.get("/admin/", async (c) => {
     c.env.DB.prepare("SELECT sample_count,max_influence,metrics,created_at FROM preference_models WHERE active=1 AND model_version=? AND embedding_version=? ORDER BY created_at DESC LIMIT 1").bind(String(c.env.PREFERENCE_MODEL_VERSION), String(c.env.EMBEDDING_VERSION)).first<{ sample_count: number; max_influence: number; metrics: string; created_at: string }>(),
     storageUsage(c.env),
     c.env.DB.prepare("SELECT alert_type,severity,subject,delivery_status,created_at FROM alerts ORDER BY created_at DESC LIMIT 10").all<{ alert_type: string; severity: string; subject: string; delivery_status: string; created_at: string }>(),
+    c.env.DB.prepare("SELECT value,updated_at FROM system_state WHERE key='reservoir_status'").first<{ value: string; updated_at: string }>(),
   ]);
   const recCount = await c.env.DB.prepare("SELECT count(*) count FROM recommendations WHERE status='published'").first<{ count: number }>();
-  return c.html(<AdminPage data={{ counts: { articles: articleCounts?.articles ?? 0, ready: articleCounts?.ready ?? 0, recommendations: recCount?.count ?? 0, failures: articleCounts?.failures ?? 0, embeddings: embeddingCount?.count ?? 0 }, preferenceModel: preferenceModel ?? undefined, storage, alerts: alerts.results, sources: sources.results, runs: runs.results, recommendations: recommendations.results }} />);
+  return c.html(<AdminPage data={{ counts: { articles: articleCounts?.articles ?? 0, ready: articleCounts?.ready ?? 0, recommendations: recCount?.count ?? 0, failures: articleCounts?.failures ?? 0, embeddings: embeddingCount?.count ?? 0 }, preferenceModel: preferenceModel ?? undefined, storage, alerts: alerts.results, reservoir: reservoir ?? undefined, sources: sources.results, runs: runs.results, recommendations: recommendations.results }} />);
 });
 app.post("/admin/run-daily", async (c) => {
   const date = shanghaiDate();
@@ -73,6 +75,10 @@ app.post("/admin/run-daily", async (c) => {
 });
 app.post("/admin/backfill", async (c) => {
   await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${crypto.randomUUID()}`, params: { limit: 25, pages: 3 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
+  return c.redirect("/admin/", 303);
+});
+app.post("/admin/run-reservoir", async (c) => {
+  await c.env.RESERVOIR_WORKFLOW.create({ id: `reservoir-manual-${crypto.randomUUID()}`, params: {}, retention: { successRetention: "3 days", errorRetention: "3 days" } });
   return c.redirect("/admin/", 303);
 });
 app.post("/admin/backfill-embeddings", async (c) => {
@@ -121,6 +127,12 @@ app.onError((error, c) => { console.error(JSON.stringify({ event: "request_error
 export default {
   fetch: app.fetch,
   async scheduled(controller, env, ctx) {
+    if (controller.cron === "15 * * * *") {
+      if (String(env.BACKFILL_ENABLED) !== "true") return;
+      const hour = new Date().toISOString().slice(0, 13).replace(/[-T:]/g, "");
+      ctx.waitUntil((async () => { try { await env.RESERVOIR_WORKFLOW.create({ id: `reservoir-${hour}`, params: {}, retention: { successRetention: "3 days", errorRetention: "3 days" } }); } catch (error) { console.log(JSON.stringify({ event: "reservoir_workflow_existing", hour, message: error instanceof Error ? error.message : String(error) })); } })());
+      return;
+    }
     if (String(env.AUTOMATION_ENABLED) !== "true") {
       console.log(JSON.stringify({ event: "automation_disabled", cron: controller.cron }));
       return;
