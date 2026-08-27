@@ -129,3 +129,14 @@ A dedicated `one-good-read-reservoir` Workflow runs at minute 15 of every hour w
 - Public recommendation automation remains separately controlled by `AUTOMATION_ENABLED` and is still disabled.
 
 The first production coordinator run planned four sources in two seconds, created four child Workflows, and increased the candidate pool while preventing duplicate analysis through D1 source locks.
+
+## Hourly backfill monitor
+
+A second hourly Cron runs at minute 45 while backfill is enabled. It records `backfill_monitor` in D1, automatically clears expired source locks, and checks:
+
+- Reservoir has produced a status update within two hours.
+- The ready-candidate count has grown within six hours.
+- `analysis_failed` remains below 10% once at least ten failures exist.
+- Backfill remains below the configured target.
+
+Stale coordination, six-hour stalls, or excessive failures create deduplicated D1 alerts. The initial production monitor completed in one second with 42 ready candidates, one failed article, no alerts, and no residual locks.

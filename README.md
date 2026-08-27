@@ -69,7 +69,7 @@ The cron expression `30 16 * * *` runs at 00:30 Asia/Shanghai. The daily workflo
 
 ## Retry, retention, and operations
 
-An hourly Reservoir coordinator safely grows the private candidate pool toward 300 articles using four locked source batches per run. “Later” schedules the article after a 14-day cooldown and may be consumed by at most two distinct recommendation exposures. Recommendation bodies expire 90 days after publication. A 06:30 Asia/Shanghai health check records missing-publication, cleanup, and storage-pressure alerts; email is optional and disabled until a sending domain is onboarded.
+An hourly Reservoir coordinator safely grows the private candidate pool toward 300 articles using four locked source batches per run. “Later” schedules the article after a 14-day cooldown and may be consumed by at most two distinct recommendation exposures. Recommendation bodies expire 90 days after publication. An hourly minute-45 monitor checks Reservoir progress and clears expired locks. A 06:30 Asia/Shanghai health check records missing-publication, cleanup, and storage-pressure alerts; email is optional and disabled until a sending domain is onboarded.
 
 ## Semantic preference learning
 

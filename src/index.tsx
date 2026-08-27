@@ -12,7 +12,7 @@ import { sourceAdapter } from "./sources";
 import { getOrTrainPreferenceModel } from "./preferences/model";
 import { embeddingProvider } from "./embeddings";
 import { isAuthorizedAdmin } from "./security/access";
-import { runOperationalHealthCheck } from "./operations/health";
+import { runBackfillHealthCheck, runOperationalHealthCheck } from "./operations/health";
 import { cleanupExpiredObjects, storageUsage } from "./operations/storage";
 import { DailyReadingWorkflow } from "./workflows/daily";
 import { ReservoirWorkflow } from "./workflows/reservoir";
@@ -131,6 +131,10 @@ export default {
       if (String(env.BACKFILL_ENABLED) !== "true") return;
       const hour = new Date().toISOString().slice(0, 13).replace(/[-T:]/g, "");
       ctx.waitUntil((async () => { try { await env.RESERVOIR_WORKFLOW.create({ id: `reservoir-${hour}`, params: {}, retention: { successRetention: "3 days", errorRetention: "3 days" } }); } catch (error) { console.log(JSON.stringify({ event: "reservoir_workflow_existing", hour, message: error instanceof Error ? error.message : String(error) })); } })());
+      return;
+    }
+    if (controller.cron === "45 * * * *") {
+      if (String(env.BACKFILL_ENABLED) === "true") ctx.waitUntil(runBackfillHealthCheck(env));
       return;
     }
     if (String(env.AUTOMATION_ENABLED) !== "true") {
