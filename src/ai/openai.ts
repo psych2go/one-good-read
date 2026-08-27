@@ -1,13 +1,23 @@
 import { weightedIntrinsicScore } from "../domain/scoring";
 import { apiEndpoint } from "./base-url";
 import type { ArticleAnalysis, ExtractedArticle, PublicRecommendationCopy, RankedCandidate } from "../domain/types";
-import type { AiProvider, AnalysisContext } from "./provider";
+import type { AiProvider, AiProbeResult, AnalysisContext } from "./provider";
 
 const THEMES = ["工作与创造","创业与商业","投资与资本配置","风险与不确定性","决策与判断","心理与行为","科技与产业","AI 与软件","经济与制度","社会与文化","学习与知识","人生与长期主义","估值与金融技术","科学与认识论"];
 
 export class OpenAiProvider implements AiProvider {
   readonly name = "openai";
   constructor(readonly model: string, private readonly apiKey: string, private readonly baseUrl: string) {}
+
+  async probe(): Promise<AiProbeResult> {
+    const result = await this.callJson<{ ok: boolean; message: string }>("one_good_read_probe", {
+      type: "object",
+      additionalProperties: false,
+      required: ["ok", "message"],
+      properties: { ok: { type: "boolean" }, message: { type: "string", maxLength: 120 } },
+    }, "Return a JSON object confirming structured output support. Set ok to true and message to a short confirmation.", "Probe the Responses API structured-output path.");
+    return { provider: this.name, model: this.model, structuredOutput: result.ok, message: result.message };
+  }
 
   async analyze(article: ExtractedArticle, context: AnalysisContext): Promise<ArticleAnalysis> {
     const blind = await this.callJson<BlindResult>(

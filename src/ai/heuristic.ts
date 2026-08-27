@@ -1,6 +1,6 @@
 import { weightedIntrinsicScore } from "../domain/scoring";
 import type { ArticleAnalysis, ExtractedArticle, PublicRecommendationCopy, RankedCandidate } from "../domain/types";
-import type { AiProvider, AnalysisContext } from "./provider";
+import type { AiProvider, AiProbeResult, AnalysisContext } from "./provider";
 
 const THEMES: Array<[string, RegExp]> = [
   ["风险与不确定性", /risk|uncertain|probab|fragil|volatil/i],
@@ -16,6 +16,8 @@ const THEMES: Array<[string, RegExp]> = [
 export class HeuristicAiProvider implements AiProvider {
   readonly name = "heuristic";
   readonly model = "deterministic-v1";
+
+  async probe(): Promise<AiProbeResult> { return { provider: this.name, model: this.model, structuredOutput: true, message: "deterministic local provider" }; }
 
   async analyze(article: ExtractedArticle, context: AnalysisContext): Promise<ArticleAnalysis> {
     const lengthFactor = Math.min(1, Math.log10(Math.max(article.wordCount, 100)) / 4);

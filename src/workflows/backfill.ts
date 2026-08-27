@@ -1,11 +1,13 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { adapterIds, backfillMissingEmbeddings, ingestSource } from "./pipeline";
 import { assertStorageAllowsBackfill } from "../operations/storage";
+import { probeProductionAi } from "../operations/ai-probe";
 
-export interface BackfillWorkflowParams { sourceId?: string; limit?: number; embeddingsOnly?: boolean; }
+export interface BackfillWorkflowParams { sourceId?: string; limit?: number; embeddingsOnly?: boolean; aiProbe?: boolean; }
 
 export class BackfillWorkflow extends WorkflowEntrypoint<Env, BackfillWorkflowParams> {
   override async run(event: Readonly<WorkflowEvent<BackfillWorkflowParams>>, step: WorkflowStep): Promise<unknown> {
+    if (event.payload.aiProbe) return step.do("production-ai-probe", { timeout: "5 minutes" }, async () => probeProductionAi(this.env));
     await step.do("storage-safety-check", async () => assertStorageAllowsBackfill(this.env));
     if (event.payload.embeddingsOnly) return step.do("backfill-embeddings", { retries: { limit: 2, delay: "10 minutes", backoff: "exponential" }, timeout: "4 hours" }, async () => backfillMissingEmbeddings(this.env, Math.min(event.payload.limit ?? 10, 20)));
     const ids = event.payload.sourceId ? [event.payload.sourceId] : adapterIds();
