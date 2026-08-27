@@ -11,11 +11,11 @@ import { sourceAdapter, sourceAdapters } from "../sources";
 
 export interface IngestSummary { sourceId: string; discovered: number; analyzed: number; rejected: number; skipped: number; errors: string[]; }
 
-export async function ingestSource(env: Env, sourceId: string, processLimit: number): Promise<IngestSummary> {
+export async function ingestSource(env: Env, sourceId: string, processLimit: number, discoveryPages = 1): Promise<IngestSummary> {
   const adapter = sourceAdapter(sourceId);
   let articles: DiscoveredArticle[];
   try {
-    articles = await adapter.discover();
+    articles = await adapter.discover({ pages: discoveryPages });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({ event: "source_discovery_failed", sourceId, message }));
@@ -45,7 +45,7 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
     }
   }
   await env.DB.prepare("UPDATE sources SET last_scanned_at=?, consecutive_failures=?, updated_at=? WHERE id=?")
-    .bind(now, summary.errors.length ? 1 : 0, now, sourceId).run();
+    .bind(now, 0, now, sourceId).run();
   return summary;
 }
 

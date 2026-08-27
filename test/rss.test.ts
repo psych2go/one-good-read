@@ -25,3 +25,13 @@ describe("generic RSS source adapter", () => {
     expect(article.extractionConfidence).toBeGreaterThanOrEqual(.9);
   });
 });
+
+describe("historical feed pagination", () => {
+  it("builds provider-specific historical page URLs", async () => {
+    const { RSS_SOURCE_CONFIGS } = await import("../src/sources/rss-config");
+    const byId = new Map(RSS_SOURCE_CONFIGS.map((config) => [config.sourceId, config]));
+    expect(byId.get("farnam-street")?.pageUrl?.(2)).toContain("paged=2");
+    expect(byId.get("aswath-damodaran")?.pageUrl?.(3)).toContain("start-index=21");
+    expect(byId.get("benedict-evans")?.pageUrl?.(2)).toContain("page=2");
+  });
+});

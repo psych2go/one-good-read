@@ -1,8 +1,8 @@
 import { XMLParser } from "fast-xml-parser";
 import type { DiscoveredArticle, ExtractedArticle, SourceId } from "../domain/types";
-import type { SourceAdapter } from "./adapter";
+import type { DiscoveryOptions, SourceAdapter } from "./adapter";
 import { stripHtmlFragment, sha256, wordCount } from "./html";
-import { fetchBoundedText } from "./http";
+import { fetchBoundedText, HttpFetchError } from "./http";
 
 interface RssItem {
   title?: unknown;
@@ -22,6 +22,7 @@ export interface RssSourceConfig {
   allowedAuthors?: string[];
   normalizeAuthor?: (raw: string) => string;
   exclude?: (item: ParsedRssItem) => boolean;
+  pageUrl?: (page: number) => string;
 }
 
 export interface ParsedRssItem {
@@ -58,16 +59,25 @@ export class RssSourceAdapter implements SourceAdapter {
   readonly sourceId: SourceId;
   constructor(private readonly config: RssSourceConfig) { this.sourceId = config.sourceId; }
 
-  async discover(): Promise<DiscoveredArticle[]> {
-    const { text } = await fetchBoundedText(this.config.feedUrl);
-    return parseRssFeed(text, this.config).map((item) => ({
-      sourceId: this.sourceId,
-      canonicalUrl: item.link,
-      title: item.title,
-      author: item.author,
-      publishedAt: item.publishedAt,
-      inlineHtml: item.html,
-    }));
+  async discover(options: DiscoveryOptions = {}): Promise<DiscoveredArticle[]> {
+    const pages = Math.max(1, Math.min(options.pages ?? 1, 100));
+    const results: DiscoveredArticle[] = [];
+    const seen = new Set<string>();
+    for (let page = 1; page <= pages; page += 1) {
+      const url = page === 1 ? this.config.feedUrl : this.config.pageUrl?.(page);
+      if (!url) break;
+      let text: string;
+      try { ({ text } = await fetchBoundedText(url)); }
+      catch (error) { if (page > 1 && error instanceof HttpFetchError && [403, 404, 429].includes(error.status)) break; throw error; }
+      const items = parseRssFeed(text, this.config);
+      if (!items.length) break;
+      for (const item of items) {
+        if (seen.has(item.link)) continue;
+        seen.add(item.link);
+        results.push({ sourceId: this.sourceId, canonicalUrl: item.link, title: item.title, author: item.author, publishedAt: item.publishedAt, inlineHtml: item.html });
+      }
+    }
+    return results;
   }
 
   async extract(article: DiscoveredArticle): Promise<ExtractedArticle> {

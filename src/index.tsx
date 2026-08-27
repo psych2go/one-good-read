@@ -72,7 +72,7 @@ app.post("/admin/run-daily", async (c) => {
   return c.redirect("/admin/", 303);
 });
 app.post("/admin/backfill", async (c) => {
-  await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${crypto.randomUUID()}`, params: { limit: 25 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
+  await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${crypto.randomUUID()}`, params: { limit: 25, pages: 3 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
   return c.redirect("/admin/", 303);
 });
 app.post("/admin/backfill-embeddings", async (c) => {
@@ -104,7 +104,7 @@ app.get("/admin/probe/:sourceId", async (c) => {
 app.post("/admin/backfill/:sourceId", async (c) => {
   const sourceId = c.req.param("sourceId");
   if (!adapterIds().includes(sourceId)) return c.text("Unknown source", 404);
-  await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${sourceId}-${crypto.randomUUID()}`, params: { sourceId, limit: 5 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
+  await c.env.BACKFILL_WORKFLOW.create({ id: `backfill-${sourceId}-${crypto.randomUUID()}`, params: { sourceId, limit: 5, pages: 5 }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
   return c.redirect("/admin/", 303);
 });
 app.post("/admin/recommendations/:id/feedback", async (c) => {

@@ -1,41 +1,33 @@
-import { XMLParser } from "fast-xml-parser";
 import type { DiscoveredArticle, ExtractedArticle } from "../domain/types";
-import type { SourceAdapter } from "./adapter";
+import type { DiscoveryOptions, SourceAdapter } from "./adapter";
 import { sha256, stripHtmlFragment, wordCount } from "./html";
-import { fetchBoundedText } from "./http";
+import { fetchBoundedText, HttpFetchError } from "./http";
+import { parseRssFeed } from "./rss";
 
 const FEED = "https://marginalrevolution.com/feed";
 
-type FeedItem = {
-  title?: string;
-  link?: string;
-  pubDate?: string;
-  "dc:creator"?: string;
-  "content:encoded"?: string;
-  description?: string;
-};
 
 export class MarginalRevolutionAdapter implements SourceAdapter {
   readonly sourceId = "marginal-revolution" as const;
 
-  async discover(): Promise<DiscoveredArticle[]> {
-    const { text } = await fetchBoundedText(FEED);
-    const parser = new XMLParser({ ignoreAttributes: false, processEntities: true, trimValues: false });
-    const parsed = parser.parse(text) as { rss?: { channel?: { item?: FeedItem | FeedItem[] } } };
-    const raw = parsed.rss?.channel?.item;
-    const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
-    return items.flatMap((item) => {
-      const author = item["dc:creator"]?.trim() ?? "";
-      if (!item.title || !item.link || !["Tyler Cowen", "Alex Tabarrok"].includes(author)) return [];
-      return [{
-        sourceId: this.sourceId,
-        canonicalUrl: item.link.trim(),
-        title: item.title.trim(),
-        author,
-        publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : undefined,
-        inlineHtml: item["content:encoded"] ?? item.description,
-      }];
-    });
+  async discover(options: DiscoveryOptions = {}): Promise<DiscoveredArticle[]> {
+    const pages = Math.max(1, Math.min(options.pages ?? 1, 100));
+    const results: DiscoveredArticle[] = [];
+    const seen = new Set<string>();
+    for (let page = 1; page <= pages; page += 1) {
+      const url = page === 1 ? FEED : `${FEED}?paged=${page}`;
+      let text: string;
+      try { ({ text } = await fetchBoundedText(url)); }
+      catch (error) { if (page > 1 && error instanceof HttpFetchError && [403, 404, 429].includes(error.status)) break; throw error; }
+      const items = parseRssFeed(text, { sourceId: this.sourceId, feedUrl: FEED, defaultAuthor: "", allowedAuthors: ["Tyler Cowen", "Alex Tabarrok"] });
+      if (!items.length) break;
+      for (const item of items) {
+        if (seen.has(item.link)) continue;
+        seen.add(item.link);
+        results.push({ sourceId: this.sourceId, canonicalUrl: item.link, title: item.title, author: item.author, publishedAt: item.publishedAt, inlineHtml: item.html });
+      }
+    }
+    return results;
   }
 
   async extract(article: DiscoveredArticle): Promise<ExtractedArticle> {

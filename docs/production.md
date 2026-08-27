@@ -110,3 +110,7 @@ On August 27, 2026, the configured relay and model passed the remote production 
 - Vectorize upsert and cleanup: passed
 
 Three initial articles were processed end to end. A subsequent controlled backfill produced 37 quality-qualified candidates across eight source groups. Long articles are now evaluated in overlapping full-text chunks, followed by a whole-article synthesis; 429, 5xx, network, and timeout failures receive up to three bounded attempts. Automation remains disabled until the 300-candidate and seven-day simulation gates are reached.
+
+## Historical discovery pagination
+
+Production source discovery now supports WordPress feed pages, Blogger `start-index`, Squarespace RSS pages, and Substack archive metadata. Substack remains RSS-first: if the archive API returns 403/429 from a Worker egress IP, history expansion stops gracefully without blocking recent articles or leaving a Workflow in a long retry wait. Historical free posts fall back from the Substack post API to the public `.available-content` HTML body when needed.

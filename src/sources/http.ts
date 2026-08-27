@@ -1,5 +1,9 @@
 const DEFAULT_LIMIT = 2_000_000;
 
+export class HttpFetchError extends Error {
+  constructor(readonly status: number, readonly url: string, readonly retryAfter?: string) { super(`Fetch failed ${status} for ${url}`); }
+}
+
 export async function fetchBoundedText(url: string, init: RequestInit = {}, maxBytes = DEFAULT_LIMIT): Promise<{ text: string; response: Response }> {
   const response = await fetch(url, {
     ...init,
@@ -11,7 +15,7 @@ export async function fetchBoundedText(url: string, init: RequestInit = {}, maxB
     redirect: "follow",
     signal: init.signal ?? AbortSignal.timeout(30_000),
   });
-  if (!response.ok) throw new Error(`Fetch failed ${response.status} for ${url}`);
+  if (!response.ok) throw new HttpFetchError(response.status, url, response.headers.get("retry-after") ?? undefined);
   const declared = Number(response.headers.get("content-length") ?? 0);
   if (declared > maxBytes) throw new Error(`Response exceeds ${maxBytes} bytes for ${url}`);
   if (!response.body) return { text: "", response };

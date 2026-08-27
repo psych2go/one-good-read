@@ -3,7 +3,7 @@ import { adapterIds, backfillMissingEmbeddings, ingestSource } from "./pipeline"
 import { assertStorageAllowsBackfill } from "../operations/storage";
 import { probeProductionAi } from "../operations/ai-probe";
 
-export interface BackfillWorkflowParams { sourceId?: string; limit?: number; embeddingsOnly?: boolean; aiProbe?: boolean; }
+export interface BackfillWorkflowParams { sourceId?: string; limit?: number; pages?: number; embeddingsOnly?: boolean; aiProbe?: boolean; }
 
 export class BackfillWorkflow extends WorkflowEntrypoint<Env, BackfillWorkflowParams> {
   override async run(event: Readonly<WorkflowEvent<BackfillWorkflowParams>>, step: WorkflowStep): Promise<unknown> {
@@ -13,7 +13,7 @@ export class BackfillWorkflow extends WorkflowEntrypoint<Env, BackfillWorkflowPa
     const ids = event.payload.sourceId ? [event.payload.sourceId] : adapterIds();
     const results = [];
     for (const sourceId of ids) {
-      results.push(await step.do(`backfill-${sourceId}`, { retries: { limit: 2, delay: "30 minutes", backoff: "exponential" }, timeout: "4 hours" }, async () => ingestSource(this.env, sourceId, Math.min(event.payload.limit ?? 25, 50))));
+      results.push(await step.do(`backfill-${sourceId}`, { retries: { limit: 2, delay: "30 minutes", backoff: "exponential" }, timeout: "4 hours" }, async () => ingestSource(this.env, sourceId, Math.min(event.payload.limit ?? 25, 50), Math.min(event.payload.pages ?? 1, 100))));
     }
     return results;
   }
