@@ -4,7 +4,7 @@
 
 Each quality-qualified article receives a versioned embedding after full-text analysis.
 
-- Production provider: configurable OpenAI-compatible embedding provider using `EMBEDDING_BASE_URL` or the shared `AI_BASE_URL`.
+- Production provider: Cloudflare Workers AI `@cf/baai/bge-small-en-v1.5` by default; configurable OpenAI-compatible embeddings remain available as an alternative.
 - Local provider: deterministic feature hashing, used only for development and tests.
 - Full vector: 384 dimensions, private JSON object in R2 and upserted into Vectorize.
 - Daily projection: fixed 64-dimensional signed feature-hash projection in D1.
@@ -54,3 +54,5 @@ Influence is confidence-gated:
 The predicted value is bounded and converted to at most `0.9` additive rank points. It cannot bypass quality, access, duplication, author cooldown, or theme-diversity rules.
 
 Every trained model stores its feature version, embedding version, sample count, weights, mean squared error, training cutoff, and active status. Each selection run records the embedding version and preference-model ID it used.
+
+The configured Workers AI model was verified against the Cloudflare API on August 27, 2026: one input returned shape `[1, 384]` with `cls` pooling, matching the existing Vectorize index.

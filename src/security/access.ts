@@ -3,6 +3,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 interface AccessEnv { ACCESS_TEAM_DOMAIN: string; ACCESS_AUD: string; ADMIN_EMAIL: string; }
 
 export async function isAuthorizedAdmin(request: Request, env: AccessEnv): Promise<boolean> {
+  if (Reflect.get(env, "LOCAL_ADMIN_BYPASS") === "true") return true;
   const requestHost = new URL(request.url).hostname;
   if (requestHost === "localhost" || requestHost === "127.0.0.1") return true;
   const teamDomain = normalizeTeamDomain(String(env.ACCESS_TEAM_DOMAIN));

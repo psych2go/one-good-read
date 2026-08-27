@@ -9,7 +9,7 @@ const automationEnabled = vars.AUTOMATION_ENABLED === "true";
 if (automationEnabled && !vars.ACCESS_AUD) errors.push("ACCESS_AUD is required before automation is enabled");
 const compatibleProviders = new Set(["openai", "openai-compatible"]);
 if (automationEnabled && !compatibleProviders.has(vars.AI_PROVIDER)) errors.push("AI_PROVIDER must be openai or openai-compatible before automation is enabled");
-if (automationEnabled && !compatibleProviders.has(vars.EMBEDDING_PROVIDER)) errors.push("EMBEDDING_PROVIDER must be openai or openai-compatible before automation is enabled");
+if (automationEnabled && !new Set([...compatibleProviders, "workers-ai"]).has(vars.EMBEDDING_PROVIDER)) errors.push("EMBEDDING_PROVIDER must be workers-ai, openai, or openai-compatible before automation is enabled");
 if (automationEnabled && !/^https:\/\//.test(vars.AI_BASE_URL ?? "")) errors.push("AI_BASE_URL must be an HTTPS API prefix");
 if (!config.d1_databases?.[0]?.database_id || /^0+$/.test(config.d1_databases[0].database_id.replaceAll("-", ""))) errors.push("A real D1 database_id is required");
 if (errors.length) { console.error(`Production configuration is incomplete:\n- ${errors.join("\n- ")}`); process.exit(1); }

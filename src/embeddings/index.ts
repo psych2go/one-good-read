@@ -1,10 +1,12 @@
 import { HeuristicEmbeddingProvider } from "./heuristic";
 import { OpenAiEmbeddingProvider } from "./openai";
 import type { EmbeddingProvider } from "./provider";
+import { WorkersAiEmbeddingProvider } from "./workers-ai";
 
 export function embeddingProvider(env: Env): EmbeddingProvider {
   const dimensions = Number(env.EMBEDDING_DIMENSIONS);
   if (!Number.isInteger(dimensions) || dimensions <= 0) throw new Error("EMBEDDING_DIMENSIONS must be a positive integer");
+  if (String(env.EMBEDDING_PROVIDER) === "workers-ai") return new WorkersAiEmbeddingProvider(env.WORKERS_AI, String(env.EMBEDDING_MODEL), dimensions);
   if (["openai", "openai-compatible"].includes(String(env.EMBEDDING_PROVIDER))) {
     const primarySecret = Reflect.get(env, "AI_API_KEY");
     const legacySecret = Reflect.get(env, "OPENAI_API_KEY");

@@ -10,6 +10,7 @@ import { BackfillWorkflow } from "./workflows/backfill";
 import { adapterIds } from "./workflows/pipeline";
 import { sourceAdapter } from "./sources";
 import { getOrTrainPreferenceModel } from "./preferences/model";
+import { embeddingProvider } from "./embeddings";
 import { isAuthorizedAdmin } from "./security/access";
 import { runOperationalHealthCheck } from "./operations/health";
 import { cleanupExpiredObjects, storageUsage } from "./operations/storage";
@@ -85,6 +86,11 @@ app.post("/admin/train-preference", async (c) => {
 app.post("/admin/cleanup-storage", async (c) => {
   await cleanupExpiredObjects(c.env, 100);
   return c.redirect("/admin/", 303);
+});
+app.get("/admin/probe-embedding", async (c) => {
+  const result = await embeddingProvider(c.env).embed("Embedding probe", "Risk, uncertainty, judgment, and long-term investing decisions.");
+  const norm = Math.sqrt(result.values.reduce((sum, value) => sum + value * value, 0));
+  return c.json({ provider: result.provider, model: result.model, dimensions: result.dimensions, norm });
 });
 app.get("/admin/probe/:sourceId", async (c) => {
   const sourceId = c.req.param("sourceId");

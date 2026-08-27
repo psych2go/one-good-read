@@ -28,3 +28,14 @@ describe("embeddings", () => {
     expect(chunks.at(-1)?.endsWith("z")).toBe(true);
   });
 });
+
+describe("Workers AI embedding chunking", () => {
+  it("keeps chunks within the small embedding model context budget", async () => {
+    const { chunkForWorkersAi } = await import("../src/embeddings/workers-ai");
+    const text = `${"paragraph words. ".repeat(500)}END`;
+    const chunks = chunkForWorkersAi(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(1_400);
+    expect(chunks.at(-1)?.endsWith("END")).toBe(true);
+  });
+});
