@@ -53,14 +53,14 @@ For an OpenAI-compatible relay, configure:
 
 ```jsonc
 "AI_PROVIDER": "openai-compatible",
-"AI_BASE_URL": "https://relay.example/v1",
-"AI_MODEL": "relay-response-model",
+"AI_BASE_URL": "https://wangzixiang.eu.org",
+"AI_MODEL": "gpt-5.6-luna",
 "EMBEDDING_PROVIDER": "openai-compatible",
 "EMBEDDING_BASE_URL": "",
 "EMBEDDING_MODEL": "relay-embedding-model"
 ```
 
-`AI_BASE_URL` is the API prefix, not the full `/responses` URL. The application appends `/responses` and `/embeddings`. Leave `EMBEDDING_BASE_URL` empty when both APIs share the same prefix. The relay must accept OpenAI Responses structured-output payloads. Embeddings default to Cloudflare Workers AI and therefore do not require the relay to expose `/embeddings`. If an OpenAI-compatible embedding provider is selected instead, the same `AI_API_KEY` is used for both calls. `OPENAI_API_KEY` remains a temporary backward-compatible fallback.
+`AI_BASE_URL` is the API prefix, not the full `/responses` URL. The configured relay exposes `/responses` directly from its root URL. The application appends `/responses` and `/embeddings`. Leave `EMBEDDING_BASE_URL` empty when both APIs share the same prefix. The relay must accept OpenAI Responses structured-output payloads. Embeddings default to Cloudflare Workers AI and therefore do not require the relay to expose `/embeddings`. If an OpenAI-compatible embedding provider is selected instead, the same `AI_API_KEY` is used for both calls. `OPENAI_API_KEY` remains a temporary backward-compatible fallback.
 
 Secrets must never be stored in `wrangler.jsonc`, `.dev.vars.example`, or GitHub.
 
