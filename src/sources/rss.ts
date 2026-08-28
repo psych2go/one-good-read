@@ -1,5 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
 import type { DiscoveredArticle, ExtractedArticle, SourceId } from "../domain/types";
+import { discoveryPageWindow } from "../domain/discovery";
 import type { DiscoveryOptions, SourceAdapter } from "./adapter";
 import { stripHtmlFragment, sha256, wordCount } from "./html";
 import { fetchBoundedText, HttpFetchError } from "./http";
@@ -63,7 +64,7 @@ export class RssSourceAdapter implements SourceAdapter {
     const pages = Math.max(1, Math.min(options.pages ?? 1, 100));
     const results: DiscoveredArticle[] = [];
     const seen = new Set<string>();
-    for (let page = 1; page <= pages; page += 1) {
+    for (const page of discoveryPageWindow(pages)) {
       const url = page === 1 ? this.config.feedUrl : this.config.pageUrl?.(page);
       if (!url) break;
       let text: string;

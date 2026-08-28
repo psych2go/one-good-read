@@ -1,4 +1,5 @@
 import type { DiscoveredArticle, ExtractedArticle } from "../domain/types";
+import { discoveryPageWindow } from "../domain/discovery";
 import type { DiscoveryOptions, SourceAdapter } from "./adapter";
 import { collectLinks, extractMeta, extractText, sha256, wordCount } from "./html";
 import { fetchBoundedText, HttpFetchError } from "./http";
@@ -12,7 +13,7 @@ export class FarnamStreetAdapter implements SourceAdapter {
     const pages = Math.max(1, Math.min(options.pages ?? 1, 100));
     const results: DiscoveredArticle[] = [];
     const seen = new Set<string>();
-    for (let page = 1; page <= pages; page += 1) {
+    for (const page of discoveryPageWindow(pages)) {
       const pageUrl = farnamArchivePageUrl(page);
       let html: string;
       try { ({ text: html } = await fetchBoundedText(pageUrl)); }
