@@ -52,7 +52,7 @@ export class SubstackArchiveAdapter implements SourceAdapter {
       const target = pages * 20;
       for (const canonicalUrl of parseSubstackSitemap(sitemap, this.config.baseUrl)) {
         if (results.length >= target) break;
-        if (seen.has(canonicalUrl)) continue;
+        if (!isSubstackSitemapCandidate(canonicalUrl) || seen.has(canonicalUrl)) continue;
         seen.add(canonicalUrl);
         results.push({ sourceId: this.sourceId, canonicalUrl, title: titleFromSlug(canonicalUrl), author: this.config.author });
       }
@@ -80,6 +80,11 @@ export class SubstackArchiveAdapter implements SourceAdapter {
       return extractedArticle(article, extracted);
     }
   }
+}
+
+export function isSubstackSitemapCandidate(value: string): boolean {
+  const slug = new URL(value).pathname.split("/").filter(Boolean).at(-1) ?? "";
+  return !/^(?:hidden-)?open-thread(?:-|$)|^links-for-|meetups?-everywhere|survey(?:-|$)|call-for-organizers|classifieds(?:-|$)/i.test(slug);
 }
 
 export function parseSubstackSitemap(xml: string, baseUrl: string): string[] {

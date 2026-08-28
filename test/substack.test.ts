@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFreeTextPost, parseSubstackSitemap } from "../src/sources/substack";
+import { isFreeTextPost, isSubstackSitemapCandidate, parseSubstackSitemap } from "../src/sources/substack";
 
 describe("Substack archive eligibility", () => {
   it("keeps free newsletter posts", () => expect(isFreeTextPost({ audience: "everyone", type: "newsletter", podcast_url: null, video_upload_id: null })).toBe(true));
@@ -16,4 +16,12 @@ describe("Substack archive eligibility", () => {
       "https://example.substack.com/p/second-post?utm_source=x&v=1",
     ]);
   });
+  it("filters non-article sitemap entries before they consume analysis work", () => {
+    expect(isSubstackSitemapCandidate("https://example.substack.com/p/a-serious-essay")).toBe(true);
+    expect(isSubstackSitemapCandidate("https://example.substack.com/p/hidden-open-thread-4445")).toBe(false);
+    expect(isSubstackSitemapCandidate("https://example.substack.com/p/links-for-april-2026")).toBe(false);
+    expect(isSubstackSitemapCandidate("https://example.substack.com/p/spring-meetups-everywhere-call")).toBe(false);
+    expect(isSubstackSitemapCandidate("https://example.substack.com/p/take-the-2026-acx-survey")).toBe(false);
+  });
+
 });
