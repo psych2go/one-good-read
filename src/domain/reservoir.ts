@@ -11,18 +11,29 @@ export function nextHistoryPages(currentPages: number, pending: number): number 
 export function selectReservoirSources(candidates: ReservoirSourceCandidate[], count: number, now = new Date()): ReservoirSourceCandidate[] {
   if (count <= 0) return [];
   const available = candidates.filter((candidate) => candidate.pending > 0);
-  const fallback = candidates.filter((candidate) => candidate.pending <= 0);
   const exploitCount = Math.max(1, count - 1);
   const byYield = [...available].sort((left, right) => reservoirScore(right, now) - reservoirScore(left, now) || left.id.localeCompare(right.id));
   const selected = byYield.slice(0, exploitCount);
   const selectedIds = new Set(selected.map((candidate) => candidate.id));
-  const remainingAvailable = available.filter((candidate) => !selectedIds.has(candidate.id));
-  const explorationPool = remainingAvailable.length ? remainingAvailable : fallback.filter((candidate) => !selectedIds.has(candidate.id));
-  explorationPool.sort((left, right) => scannedTime(left.lastScannedAt) - scannedTime(right.lastScannedAt) || left.id.localeCompare(right.id));
-  if (selected.length < count && explorationPool[0]) selected.push(explorationPool[0]);
-  for (const candidate of byYield.slice(exploitCount)) {
+
+  // Exploration must consider every unselected source, including a source whose
+  // current discovery window is empty. Selecting it increases history_pages;
+  // excluding it here would permanently freeze its historical depth while a
+  // large queue from another source remains.
+  const explorationPool = candidates
+    .filter((candidate) => !selectedIds.has(candidate.id))
+    .sort((left, right) => scannedTime(left.lastScannedAt) - scannedTime(right.lastScannedAt) || left.id.localeCompare(right.id));
+  if (selected.length < count && explorationPool[0]) {
+    selected.push(explorationPool[0]);
+    selectedIds.add(explorationPool[0].id);
+  }
+  for (const candidate of byYield) {
     if (selected.length >= count) break;
-    if (!selected.some((item) => item.id === candidate.id)) selected.push(candidate);
+    if (!selectedIds.has(candidate.id)) { selected.push(candidate); selectedIds.add(candidate.id); }
+  }
+  for (const candidate of explorationPool) {
+    if (selected.length >= count) break;
+    if (!selectedIds.has(candidate.id)) { selected.push(candidate); selectedIds.add(candidate.id); }
   }
   return selected.slice(0, count);
 }

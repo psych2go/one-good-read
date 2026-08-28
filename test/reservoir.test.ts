@@ -15,9 +15,18 @@ describe("reservoir source selection", () => {
   ];
   it("uses three exploitation slots and one oldest-source exploration slot", () => expect(selectReservoirSources(candidates, 4, now).map((item) => item.id)).toEqual(["high-a", "high-b", "medium", "old-explore"]));
 
-  it("does not waste the exploration slot on an empty source while pending work exists", () => {
+  it("uses the exploration slot to deepen an old source whose current queue is empty", () => {
     const withEmptyOldest = [...candidates, { id: "empty-oldest", pending: 0, ready: 0, rejected: 0, lastScannedAt: "2026-08-20T00:00:00Z" }];
-    expect(selectReservoirSources(withEmptyOldest, 4, now).map((item) => item.id)).not.toContain("empty-oldest");
+    expect(selectReservoirSources(withEmptyOldest, 4, now).map((item) => item.id)).toEqual(["high-a", "high-b", "medium", "empty-oldest"]);
+  });
+
+  it("rotates across multiple empty sources when all current queues are exhausted", () => {
+    const empty = [
+      { id: "oldest", pending: 0, ready: 2, rejected: 4, lastScannedAt: "2026-08-20T00:00:00Z" },
+      { id: "older", pending: 0, ready: 3, rejected: 2, lastScannedAt: "2026-08-21T00:00:00Z" },
+      { id: "newer", pending: 0, ready: 1, rejected: 1, lastScannedAt: "2026-08-22T00:00:00Z" },
+    ];
+    expect(selectReservoirSources(empty, 2, now).map((item) => item.id)).toEqual(["oldest", "older"]);
   });
   it("smooths low-sample acceptance rates", () => { expect(smoothedAcceptance({ ready: 0, rejected: 0 })).toBe(.5); expect(smoothedAcceptance({ ready: 8, rejected: 2 })).toBe(.75); });
 });
