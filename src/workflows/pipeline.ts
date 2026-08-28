@@ -9,6 +9,7 @@ import { diverseTop, passesQualityGate, rankCandidate, stableRank } from "../dom
 import type { DiscoveredArticle, RankedCandidate } from "../domain/types";
 import { annotateSelectionRun, createSelectionRun, DuplicateContentError, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, saveSimulationRecommendation, upsertDiscovered, markRejected } from "../db/repository";
 import { sourceAdapter, sourceAdapters } from "../sources";
+import { PermanentArticleError } from "../sources/adapter";
 
 export interface IngestSummary { sourceId: string; discovered: number; analyzed: number; rejected: number; skipped: number; errors: string[]; }
 
@@ -38,7 +39,7 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
     const id = await upsertDiscovered(env.DB, article, now);
     const state = await env.DB.prepare("SELECT status,rejection_reason FROM articles WHERE id=?").bind(id).first<{ status: string; rejection_reason: string | null }>();
     const retryableRejection = state?.status === "rejected" && state.rejection_reason === "empty_body";
-    if (state?.status && !["discovered", "analysis_failed", "unavailable"].includes(state.status) && !retryableRejection) { summary.skipped += 1; continue; }
+    if (state?.status && !["discovered", "analysis_failed"].includes(state.status) && !retryableRejection) { summary.skipped += 1; continue; }
     if (processed >= processLimit) { summary.skipped += 1; continue; }
     processed += 1;
     try {
@@ -46,6 +47,12 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
       summary.analyzed += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error instanceof PermanentArticleError) {
+        summary.rejected += 1;
+        await env.DB.prepare("UPDATE articles SET status='unavailable', access_state='unavailable', rejection_reason=?, updated_at=? WHERE id=?")
+          .bind(message.slice(0, 500), new Date().toISOString(), id).run();
+        continue;
+      }
       summary.errors.push(`${article.canonicalUrl}: ${message}`);
       await env.DB.prepare("UPDATE articles SET status='analysis_failed', retry_count=retry_count+1, rejection_reason=?, updated_at=? WHERE id=?")
         .bind(message.slice(0, 500), new Date().toISOString(), id).run();

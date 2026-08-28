@@ -7,3 +7,7 @@ export interface SourceAdapter {
   discover(options?: DiscoveryOptions): Promise<DiscoveredArticle[]>;
   extract(article: DiscoveredArticle): Promise<ExtractedArticle>;
 }
+
+export class PermanentArticleError extends Error {
+  constructor(message: string) { super(message); this.name = "PermanentArticleError"; }
+}

@@ -1,6 +1,6 @@
 import type { DiscoveredArticle, ExtractedArticle, SourceId } from "../domain/types";
-import type { DiscoveryOptions, SourceAdapter } from "./adapter";
-import { extractText, sha256, stripHtmlFragment, wordCount } from "./html";
+import { PermanentArticleError, type DiscoveryOptions, type SourceAdapter } from "./adapter";
+import { decodeHtmlEntities, extractText, sha256, stripHtmlFragment, wordCount } from "./html";
 import { fetchBoundedText, HttpFetchError } from "./http";
 import { parseRssFeed } from "./rss";
 
@@ -43,28 +43,22 @@ export class SubstackArchiveAdapter implements SourceAdapter {
     }
     if (pages === 1) return results;
 
-    const pageSize = 20;
-    for (let page = 0; page < pages; page += 1) {
-      const url = `${this.config.baseUrl}/api/v1/archive?sort=new&search=&offset=${page * pageSize}&limit=${pageSize}`;
-      let text: string;
-      try { ({ text } = await fetchBoundedText(url)); }
-      catch (error) {
-        if (error instanceof HttpFetchError && [403, 429].includes(error.status)) {
-          console.warn(JSON.stringify({ event: "substack_archive_limited", sourceId: this.sourceId, status: error.status, retryAfter: error.retryAfter ?? null }));
-          break;
-        }
-        throw error;
-      }
-      const posts = JSON.parse(text) as ArchivePost[];
-      if (!posts.length) break;
-      for (const post of posts) {
-        if (!isFreeTextPost(post) || !post.slug || !post.title) continue;
-        const canonicalUrl = post.canonical_url || `${this.config.baseUrl}/p/${post.slug}`;
+    // The archive API rate-limits Worker egress after the first request. The
+    // publication sitemap is a single bounded document containing the full
+    // post history, so use it to extend beyond the RSS window. Eligibility is
+    // verified when the post body is fetched.
+    try {
+      const { text: sitemap } = await fetchBoundedText(`${this.config.baseUrl}/sitemap.xml`);
+      const target = pages * 20;
+      for (const canonicalUrl of parseSubstackSitemap(sitemap, this.config.baseUrl)) {
+        if (results.length >= target) break;
         if (seen.has(canonicalUrl)) continue;
         seen.add(canonicalUrl);
-        results.push({ sourceId: this.sourceId, canonicalUrl, title: post.title, author: this.config.author, publishedAt: parseDate(post.post_date) });
+        results.push({ sourceId: this.sourceId, canonicalUrl, title: titleFromSlug(canonicalUrl), author: this.config.author });
       }
-      if (posts.length < pageSize) break;
+    } catch (error) {
+      if (!(error instanceof HttpFetchError) || ![403, 429].includes(error.status)) throw error;
+      console.warn(JSON.stringify({ event: "substack_sitemap_limited", sourceId: this.sourceId, status: error.status, retryAfter: error.retryAfter ?? null }));
     }
     return results;
   }
@@ -76,7 +70,7 @@ export class SubstackArchiveAdapter implements SourceAdapter {
     try {
       const { text } = await fetchBoundedText(`${this.config.baseUrl}/api/v1/posts/${encodeURIComponent(slug)}`);
       const post = JSON.parse(text) as FullPost;
-      if (!isFreeTextPost(post) || post.free_unlock_required || typeof post.body_html !== "string" || !post.body_html.trim()) throw new Error("Substack post is not a free full-text article");
+      if (!isFreeTextPost(post) || post.free_unlock_required || typeof post.body_html !== "string" || !post.body_html.trim()) throw new PermanentArticleError("Substack post is not a free full-text article");
       return extractedArticle({ ...article, title: post.title || article.title, publishedAt: parseDate(post.post_date) ?? article.publishedAt }, stripHtmlFragment(post.body_html), post.wordcount);
     } catch (error) {
       if (!(error instanceof HttpFetchError) || ![403, 429].includes(error.status)) throw error;
@@ -86,6 +80,29 @@ export class SubstackArchiveAdapter implements SourceAdapter {
       return extractedArticle(article, extracted);
     }
   }
+}
+
+export function parseSubstackSitemap(xml: string, baseUrl: string): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const match of xml.matchAll(/<loc>([\s\S]*?)<\/loc>/gi)) {
+    const value = decodeHtmlEntities(match[1] ?? "").trim();
+    try {
+      const url = new URL(value, baseUrl);
+      if (url.origin !== new URL(baseUrl).origin || !url.pathname.startsWith("/p/")) continue;
+      url.hash = "";
+      const canonical = url.toString();
+      if (!seen.has(canonical)) { seen.add(canonical); urls.push(canonical); }
+    } catch {
+      // Ignore malformed sitemap entries.
+    }
+  }
+  return urls;
+}
+
+function titleFromSlug(value: string): string {
+  const slug = new URL(value).pathname.split("/").filter(Boolean).at(-1) ?? "Untitled";
+  return slug.split("-").filter(Boolean).map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
 }
 
 export const SUBSTACK_CONFIGS: SubstackConfig[] = [
