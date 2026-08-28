@@ -1,5 +1,6 @@
 import type { SourceAdapter } from "./adapter";
 import { HowardMarksAdapter } from "./howard-marks";
+import { FarnamStreetAdapter } from "./farnam-street";
 import { CollabFundAdapter, COLLAB_FUND_CONFIGS } from "./collab-fund";
 import { MarginalRevolutionAdapter } from "./marginal-revolution";
 import { PaulGrahamAdapter } from "./paul-graham";
@@ -8,7 +9,7 @@ import { RSS_SOURCE_CONFIGS } from "./rss-config";
 import { SubstackArchiveAdapter, SUBSTACK_CONFIGS } from "./substack";
 
 export function sourceAdapters(): SourceAdapter[] {
-  return [new PaulGrahamAdapter(), new MarginalRevolutionAdapter(), new HowardMarksAdapter(), ...RSS_SOURCE_CONFIGS.map((config) => new RssSourceAdapter(config)), ...COLLAB_FUND_CONFIGS.map((config) => new CollabFundAdapter(config)), ...SUBSTACK_CONFIGS.map((config) => new SubstackArchiveAdapter(config))];
+  return [new PaulGrahamAdapter(), new MarginalRevolutionAdapter(), new HowardMarksAdapter(), new FarnamStreetAdapter(), ...RSS_SOURCE_CONFIGS.map((config) => new RssSourceAdapter(config)), ...COLLAB_FUND_CONFIGS.map((config) => new CollabFundAdapter(config)), ...SUBSTACK_CONFIGS.map((config) => new SubstackArchiveAdapter(config))];
 }
 
 export function sourceAdapter(id: string): SourceAdapter {

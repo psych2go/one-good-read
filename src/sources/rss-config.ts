@@ -2,13 +2,6 @@ import type { RssSourceConfig } from "./rss";
 
 export const RSS_SOURCE_CONFIGS: RssSourceConfig[] = [
   {
-    sourceId: "farnam-street",
-    feedUrl: "https://fs.blog/feed/",
-    defaultAuthor: "Farnam Street",
-    exclude: (item) => /knowledge-project-podcast|\/podcast\//i.test(item.link) || /\bpodcast\b/i.test(item.title),
-    pageUrl: (page) => `https://fs.blog/feed/?paged=${page}`,
-  },
-  {
     sourceId: "aswath-damodaran",
     feedUrl: "https://aswathdamodaran.blogspot.com/feeds/posts/default?alt=rss&max-results=10",
     defaultAuthor: "Aswath Damodaran",
