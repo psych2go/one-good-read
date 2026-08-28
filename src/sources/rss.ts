@@ -2,7 +2,7 @@ import { XMLParser } from "fast-xml-parser";
 import type { DiscoveredArticle, ExtractedArticle, SourceId } from "../domain/types";
 import { discoveryPageWindow } from "../domain/discovery";
 import type { DiscoveryOptions, SourceAdapter } from "./adapter";
-import { stripHtmlFragment, sha256, wordCount } from "./html";
+import { extractMeta, extractText, stripHtmlFragment, sha256, wordCount } from "./html";
 import { fetchBoundedText, HttpFetchError } from "./http";
 
 interface RssItem {
@@ -24,6 +24,7 @@ export interface RssSourceConfig {
   normalizeAuthor?: (raw: string) => string;
   exclude?: (item: ParsedRssItem) => boolean;
   pageUrl?: (page: number) => string;
+  articleSelector?: string;
 }
 
 export interface ParsedRssItem {
@@ -58,7 +59,8 @@ export function parseRssFeed(xml: string, config: RssSourceConfig): ParsedRssIte
 
 export class RssSourceAdapter implements SourceAdapter {
   readonly sourceId: SourceId;
-  constructor(private readonly config: RssSourceConfig) { this.sourceId = config.sourceId; }
+  readonly supportsDeferredExtraction: boolean;
+  constructor(private readonly config: RssSourceConfig) { this.sourceId = config.sourceId; this.supportsDeferredExtraction = Boolean(config.articleSelector); }
 
   async discover(options: DiscoveryOptions = {}): Promise<DiscoveredArticle[]> {
     const pages = Math.max(1, Math.min(options.pages ?? 1, 100));
@@ -82,17 +84,31 @@ export class RssSourceAdapter implements SourceAdapter {
   }
 
   async extract(article: DiscoveredArticle): Promise<ExtractedArticle> {
-    if (!article.inlineHtml) throw new Error(`${this.sourceId} RSS item has no full content`);
-    const extracted = stripHtmlFragment(article.inlineHtml);
+    let extracted: { text: string; links: number };
+    let title = article.title;
+    let publishedAt = article.publishedAt;
+    let sourceHtml = article.inlineHtml;
+    if (sourceHtml) extracted = stripHtmlFragment(sourceHtml);
+    else {
+      if (!this.config.articleSelector) throw new Error(`${this.sourceId} RSS item has no deferred extraction selector`);
+      const { text: html } = await fetchBoundedText(article.canonicalUrl);
+      const [meta, page] = await Promise.all([extractMeta(html), extractText(html, this.config.articleSelector)]);
+      extracted = page;
+      sourceHtml = html;
+      title = meta.ogTitle || meta.title || title;
+      publishedAt = meta.published ? new Date(meta.published).toISOString() : publishedAt;
+    }
     if (isPartialPreview(extracted.text)) throw new Error("RSS content is a partial or subscriber-only preview");
     const words = wordCount(extracted.text);
     return {
       ...article,
+      title,
+      publishedAt,
       text: extracted.text,
       contentHash: await sha256(extracted.text),
       wordCount: words,
       readingMinutes: Math.max(1, Math.ceil(words / 230)),
-      extractionConfidence: extractionConfidence(words, article.inlineHtml),
+      extractionConfidence: extractionConfidence(words, sourceHtml),
       externalLinkCount: extracted.links,
     };
   }

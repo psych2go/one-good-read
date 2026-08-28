@@ -28,6 +28,7 @@ interface FullPost extends ArchivePost {
 
 export class SubstackArchiveAdapter implements SourceAdapter {
   readonly sourceId: SubstackConfig["sourceId"];
+  readonly supportsDeferredExtraction = true;
   constructor(private readonly config: SubstackConfig) { this.sourceId = config.sourceId; }
 
   async discover(options: DiscoveryOptions = {}): Promise<DiscoveredArticle[]> {

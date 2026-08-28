@@ -8,6 +8,7 @@ export const RSS_SOURCE_CONFIGS: RssSourceConfig[] = [
     allowedAuthors: ["Aswath Damodaran"],
     normalizeAuthor: () => "Aswath Damodaran",
     pageUrl: (page) => `https://aswathdamodaran.blogspot.com/feeds/posts/default?alt=rss&max-results=10&start-index=${(page - 1) * 10 + 1}`,
+    articleSelector: ".post-body.entry-content",
   },
   {
     sourceId: "stratechery",
@@ -16,6 +17,7 @@ export const RSS_SOURCE_CONFIGS: RssSourceConfig[] = [
     allowedAuthors: ["Ben Thompson"],
     exclude: (item) => !item.categories.includes("Articles"),
     pageUrl: (page) => `https://stratechery.com/feed/?paged=${page}`,
+    articleSelector: ".entry-content",
   },
   {
     sourceId: "benedict-evans",
@@ -23,5 +25,6 @@ export const RSS_SOURCE_CONFIGS: RssSourceConfig[] = [
     defaultAuthor: "Benedict Evans",
     allowedAuthors: ["Benedict Evans"],
     pageUrl: (page) => `https://www.ben-evans.com/benedictevans?format=rss&page=${page}`,
+    articleSelector: "article",
   },
 ];

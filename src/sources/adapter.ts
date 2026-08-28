@@ -4,6 +4,7 @@ export interface DiscoveryOptions { pages?: number; }
 
 export interface SourceAdapter {
   readonly sourceId: SourceId;
+  readonly supportsDeferredExtraction?: boolean;
   discover(options?: DiscoveryOptions): Promise<DiscoveredArticle[]>;
   extract(article: DiscoveredArticle): Promise<ExtractedArticle>;
 }

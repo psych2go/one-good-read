@@ -33,6 +33,14 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
     throw error;
   }
   const summary: IngestSummary = { sourceId, discovered: articles.length, analyzed: 0, rejected: 0, skipped: 0, errors: [] };
+  if (adapter.supportsDeferredExtraction) {
+    const currentByUrl = new Map(articles.map((article) => [article.canonicalUrl, article]));
+    const pending = await env.DB.prepare(`SELECT canonical_url,title,author,published_at FROM articles WHERE source_id=? AND status IN ('analysis_failed','discovered') ORDER BY CASE status WHEN 'analysis_failed' THEN 0 ELSE 1 END,datetime(updated_at) ASC LIMIT ?`)
+      .bind(sourceId, Math.max(50, processLimit * 10)).all<{ canonical_url: string; title: string; author: string; published_at: string | null }>();
+    const prioritized: DiscoveredArticle[] = pending.results.map((row) => currentByUrl.get(row.canonical_url) ?? { sourceId: adapter.sourceId, canonicalUrl: row.canonical_url, title: row.title, author: row.author, publishedAt: row.published_at ?? undefined });
+    const prioritizedUrls = new Set(prioritized.map((article) => article.canonicalUrl));
+    articles = [...prioritized, ...articles.filter((article) => !prioritizedUrls.has(article.canonicalUrl))];
+  }
   const now = new Date().toISOString();
   let processed = 0;
   for (const article of articles) {

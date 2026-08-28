@@ -8,6 +8,7 @@ const ARCHIVE_URL = "https://fs.blog/blog/";
 
 export class FarnamStreetAdapter implements SourceAdapter {
   readonly sourceId = "farnam-street" as const;
+  readonly supportsDeferredExtraction = true;
 
   async discover(options: DiscoveryOptions = {}): Promise<DiscoveredArticle[]> {
     const pages = Math.max(1, Math.min(options.pages ?? 1, 100));
