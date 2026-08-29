@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
-import { addFeedback } from "./db/repository";
+import { addFeedback, addSimulationFeedback } from "./db/repository";
 import { archiveFacets, archiveRecommendations, latestRecommendation, recommendationByDate } from "./db/queries";
 import { shanghaiDate } from "./domain/date";
 import { reservoirInstanceId } from "./domain/cron";
@@ -67,12 +67,13 @@ app.get("/admin/", async (c) => {
     c.env.DB.prepare("SELECT alert_type,severity,subject,delivery_status,created_at FROM alerts ORDER BY created_at DESC LIMIT 10").all<{ alert_type: string; severity: string; subject: string; delivery_status: string; created_at: string }>(),
     c.env.DB.prepare("SELECT value,updated_at FROM system_state WHERE key='reservoir_status'").first<{ value: string; updated_at: string }>(),
     c.env.DB.prepare("SELECT value,updated_at FROM system_state WHERE key='simulation_status'").first<{ value: string; updated_at: string }>(),
-    c.env.DB.prepare("SELECT sr.simulation_date,a.title,a.author,sr.created_at FROM simulation_recommendations sr JOIN articles a ON a.id=sr.article_id ORDER BY sr.simulation_date DESC LIMIT 10").all<{ simulation_date: string; title: string; author: string; created_at: string }>(),
+    c.env.DB.prepare(`SELECT sr.simulation_date,a.title,a.author,a.canonical_url,a.reading_minutes,sr.why_worth_reading,sr.why_today,sr.public_keywords,sr.created_at,(SELECT sf.kind FROM simulation_feedback sf WHERE sf.simulation_date=sr.simulation_date ORDER BY sf.created_at DESC LIMIT 1) feedback_kind FROM simulation_recommendations sr JOIN articles a ON a.id=sr.article_id ORDER BY sr.simulation_date DESC LIMIT 10`).all<{ simulation_date: string; title: string; author: string; canonical_url: string; reading_minutes: number; why_worth_reading: string; why_today: string; public_keywords: string; feedback_kind: string | null; created_at: string }>(),
   ]);
   const recCount = await c.env.DB.prepare("SELECT count(*) count FROM recommendations WHERE status='published'").first<{ count: number }>();
-  return c.html(<AdminPage data={{ counts: { articles: articleCounts?.articles ?? 0, ready: articleCounts?.ready ?? 0, recommendations: recCount?.count ?? 0, failures: articleCounts?.failures ?? 0, embeddings: embeddingCount?.count ?? 0 }, preferenceModel: preferenceModel ?? undefined, storage, alerts: alerts.results, reservoir: reservoir ?? undefined, simulation: simulation ?? undefined, simulationRows: simulationRows.results, sources: sources.results, runs: runs.results, recommendations: recommendations.results }} />);
+  return c.html(<AdminPage data={{ automationEnabled: String(c.env.AUTOMATION_ENABLED) === "true", counts: { articles: articleCounts?.articles ?? 0, ready: articleCounts?.ready ?? 0, recommendations: recCount?.count ?? 0, failures: articleCounts?.failures ?? 0, embeddings: embeddingCount?.count ?? 0 }, preferenceModel: preferenceModel ?? undefined, storage, alerts: alerts.results, reservoir: reservoir ?? undefined, simulation: simulation ?? undefined, simulationRows: simulationRows.results, sources: sources.results, runs: runs.results, recommendations: recommendations.results }} />);
 });
 app.post("/admin/run-daily", async (c) => {
+  if (String(c.env.AUTOMATION_ENABLED) !== "true") return c.text("Public automation is disabled during private simulation", 409);
   const date = shanghaiDate();
   try { await c.env.DAILY_WORKFLOW.create({ id: `daily-${date}`, params: { date, scan: false, deferPublication: false }, retention: { successRetention: "3 days", errorRetention: "3 days" } }); } catch (error) { console.log(JSON.stringify({ event: "daily_workflow_existing", date, message: error instanceof Error ? error.message : String(error) })); }
   return c.redirect("/admin/", 303);
@@ -88,6 +89,15 @@ app.post("/admin/run-reservoir", async (c) => {
 app.post("/admin/run-simulation", async (c) => {
   const date = shanghaiDate();
   await c.env.SIMULATION_WORKFLOW.create({ id: `simulation-manual-${date}-${crypto.randomUUID()}`, params: { date, deferSelection: false }, retention: { successRetention: "3 days", errorRetention: "3 days" } });
+  return c.redirect("/admin/", 303);
+});
+app.post("/admin/simulations/:date/feedback", async (c) => {
+  const date = c.req.param("date");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.text("Invalid date", 400);
+  const body = await c.req.parseBody();
+  const kind = body.kind;
+  if (typeof kind !== "string" || !isFeedbackKind(kind)) return c.text("Invalid feedback", 400);
+  await addSimulationFeedback(c.env.DB, date, kind);
   return c.redirect("/admin/", 303);
 });
 app.post("/admin/backfill-embeddings", async (c) => {

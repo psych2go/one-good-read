@@ -84,13 +84,22 @@ export async function loadActivePreferenceModel(db: D1Database, modelVersion: st
 
 async function trainingRows(db: D1Database, analysisVersion: string, embeddingVersion: string): Promise<TrainingRow[]> {
   const result = await db.prepare(`
+    WITH all_feedback AS (
+      SELECT f.kind,f.created_at,r.article_id
+      FROM feedback f JOIN recommendations r ON r.id=f.recommendation_id
+      UNION ALL
+      SELECT sf.kind,sf.created_at,sr.article_id
+      FROM simulation_feedback sf JOIN simulation_recommendations sr ON sr.simulation_date=sf.simulation_date
+    ), latest_feedback AS (
+      SELECT kind,created_at,article_id,row_number() OVER (PARTITION BY article_id ORDER BY datetime(created_at) DESC) position
+      FROM all_feedback
+    )
     SELECT f.kind,f.created_at,a.author,a.word_count,a.id article_id,n.*,e.projection
-    FROM feedback f
-    JOIN recommendations r ON r.id=f.recommendation_id
-    JOIN articles a ON a.id=r.article_id
+    FROM latest_feedback f
+    JOIN articles a ON a.id=f.article_id
     JOIN analyses n ON n.article_id=a.id AND n.analysis_version=?
     JOIN embeddings e ON e.article_id=a.id AND e.embedding_version=?
-    WHERE f.id=(SELECT f2.id FROM feedback f2 WHERE f2.recommendation_id=f.recommendation_id ORDER BY f2.created_at DESC LIMIT 1)
+    WHERE f.position=1
     ORDER BY f.created_at ASC
   `).bind(analysisVersion, embeddingVersion).all<TrainingRow>();
   return result.results;

@@ -122,7 +122,18 @@ export async function readyCandidates(db: D1Database, analysisVersion: string, e
     LEFT JOIN embeddings e ON e.article_id=a.id AND e.embedding_version=?
     WHERE a.status='ready' AND a.access_state='free'
       AND (NOT EXISTS (SELECT 1 FROM recommendations r WHERE r.article_id=a.id AND r.status='published') OR (a.retry_eligible_at IS NOT NULL AND datetime(a.retry_eligible_at) <= datetime('now') AND a.recommendation_retry_count BETWEEN 1 AND 2))
-      AND (?=0 OR NOT EXISTS (SELECT 1 FROM simulation_recommendations sr WHERE sr.article_id=a.id))
+      AND (?=0 OR NOT EXISTS (
+        SELECT 1 FROM simulation_recommendations sr
+        WHERE sr.article_id=a.id
+          AND NOT EXISTS (
+            SELECT 1 FROM simulation_feedback sf
+            WHERE sf.simulation_date=sr.simulation_date
+              AND sf.id=(SELECT sf2.id FROM simulation_feedback sf2 WHERE sf2.simulation_date=sr.simulation_date ORDER BY sf2.created_at DESC LIMIT 1)
+              AND sf.kind='later'
+              AND sf.retry_eligible_at IS NOT NULL
+              AND datetime(sf.retry_eligible_at) <= datetime('now')
+          )
+      ))
     ORDER BY n.intrinsic_score DESC, a.id ASC
     LIMIT ?
   `).bind(analysisVersion, embeddingVersion, simulation ? 1 : 0, limit).all<ReadyArticleRow>();
@@ -239,6 +250,14 @@ export async function saveSimulationRecommendation(input: {
 
 export async function failSelectionRun(db: D1Database, runId: string, reason: string, now: string): Promise<void> {
   await db.prepare("UPDATE selection_runs SET status='failed', failure_reason=?, completed_at=? WHERE id=?").bind(reason, now, runId).run();
+}
+
+export async function addSimulationFeedback(db: D1Database, simulationDate: string, kind: FeedbackKind, now = new Date()): Promise<void> {
+  const simulation = await db.prepare("SELECT article_id FROM simulation_recommendations WHERE simulation_date=?").bind(simulationDate).first<{ article_id: string }>();
+  if (!simulation) throw new Error("Simulation recommendation not found");
+  const retryEligibleAt = kind === "later" ? new Date(now.getTime() + 14 * 86_400_000).toISOString() : null;
+  await db.prepare("INSERT INTO simulation_feedback (id,simulation_date,kind,retry_eligible_at,created_at) VALUES (?,?,?,?,?)")
+    .bind(crypto.randomUUID(), simulationDate, kind, retryEligibleAt, now.toISOString()).run();
 }
 
 export async function addFeedback(db: D1Database, recommendationId: string, kind: FeedbackKind, now = new Date()): Promise<void> {
