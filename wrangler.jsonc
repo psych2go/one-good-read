@@ -30,12 +30,12 @@
     "ALERT_TO_EMAIL": "",
     "ALERT_FROM_EMAIL": "",
     "R2_STORAGE_LIMIT_BYTES": "10000000000",
-    "AUTOMATION_ENABLED": "false",
+    "AUTOMATION_ENABLED": "true",
     "BACKFILL_ENABLED": "true",
     "RESERVOIR_TARGET": "300",
     "RESERVOIR_BATCH_SIZE": "3",
     "RESERVOIR_SOURCES_PER_RUN": "4",
-    "SIMULATION_ENABLED": "true",
+    "SIMULATION_ENABLED": "false",
     "SIMULATION_DAYS_REQUIRED": "7"
   },
   "d1_databases": [

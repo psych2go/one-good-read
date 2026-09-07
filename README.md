@@ -44,9 +44,9 @@ npm run dev
 
 Open `http://localhost:8787/admin`, run a source-specific or full backfill, then run the daily workflow. `GET /admin/probe/:sourceId?extract=1` verifies discovery and the first extraction without persisting it. Local admin access is intentionally allowed only when `APP_ORIGIN` points to `localhost`.
 
-## Production setup
+## Production
 
-The production safe shell is live at `https://read.zhuying.fun`. Dedicated D1, R2, and Vectorize resources have been provisioned and remote migrations are applied. Automation remains disabled until Access and the production AI secret are configured. See `docs/production.md` for the remaining domain, Access, AI secret, and optional Email Sending configuration.
+The production site is live at `https://read.zhuying.fun`. Dedicated D1, R2, and Vectorize resources are provisioned, Cloudflare Access protects `/admin/*`, and the production relay AI and Workers AI embeddings passed remote probes. After eight consecutive simulation days with daily feedback, public daily automation was enabled on 2026-09-07: one recommendation publishes every day at 06:00 Asia/Shanghai. See `docs/production.md` for the full deployment, simulation, and launch record.
 
 
 1. Create D1, R2, Workflow resources, and a 384-dimensional cosine Vectorize index; then replace the placeholder D1 ID in `wrangler.jsonc`.

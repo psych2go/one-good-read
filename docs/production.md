@@ -16,10 +16,7 @@ All D1 migrations through `0007_retry_storage_alerts.sql` have been applied remo
 
 ## Remaining activation inputs
 
-- production OpenAI API key stored with Wrangler Secrets
-- optional Email Sending domain onboarding
-
-After the production AI secret is configured, set `AI_PROVIDER=openai`, `EMBEDDING_PROVIDER=openai`, and `AUTOMATION_ENABLED=true`, run the deployment safety check, and deploy again.
+The production OpenAI-compatible relay secret, Cloudflare Access, and the seven-day simulation gate are all complete. Public automation was enabled on 2026-09-07: `AUTOMATION_ENABLED=true`, `SIMULATION_ENABLED=false`, deployed after the preflight check passed. The first scheduled public run is the 00:30 Asia/Shanghai trigger, with publication at 06:00 Shanghai.
 
 ## Deployment safety gate
 
@@ -161,6 +158,14 @@ Every successful paginated scan persists its actual `history_pages` depth. This 
 - Seven consecutive days set `simulation_status.ready=true` and create a private operational alert for final launch auditing.
 
 The production gate was verified with 52 Ready articles: the Workflow completed in one second with `status=skipped`; simulation rows and published recommendations both remained zero.
+
+The real simulation then ran for eight consecutive days from 2026-08-29 to 2026-09-05 with one administrator feedback label per day (three valuable, four good, one unfinished) and no negative labels. `simulation_status.ready=true` and the private `simulation_ready` alert fired on 2026-09-04.
+
+Two later runs (2026-09-06 and 2026-09-07) failed with relay-wide `429 model_cooldown` errors: the shared relay credentials had exhausted their usage limit before the 05:30 selection window. The retry ladder (21:30, 21:45, 22:15 UTC) behaved correctly but could not outlast a multi-hour cooldown. Because the same shared relay can be cooled down by other users, `provider.writeRecommendation` now falls back to the deterministic heuristic copy instead of failing the whole selection run (`copywriting_fallback` event); the AI editor choice already had this fallback. With both fallbacks in place, a relay outage degrades copy quality for one day but can no longer stop publication.
+
+## Launch
+
+2026-09-07: final launch audit passed (305 Ready candidates, 8/8 simulation days with daily feedback, preference model still below the 10-sample training threshold by design, Access enforced, no public recommendations yet), the copywriting fallback was added and tested, and `AUTOMATION_ENABLED` was switched to `true` with `SIMULATION_ENABLED=false`. Reservoir maintenance stays enabled to keep the pool at target.
 
 ## Reservoir throughput tuning
 

@@ -1,4 +1,6 @@
 import { aiProvider } from "../ai";
+import { fallbackRecommendationCopy } from "../ai/fallback-copy";
+import type { PublicRecommendationCopy } from "../domain/types";
 import { backfillMissingEmbeddings, createAndStoreEmbedding, projectionMap } from "../embeddings/service";
 import { getOrTrainPreferenceModel, loadActivePreferenceModel, predictPersonalFit } from "../preferences/model";
 import { semanticSignals } from "../preferences/semantic";
@@ -158,7 +160,13 @@ async function prepareDailyChoice(env: Env, date: string, simulation: boolean): 
     } catch (error) {
       console.error(JSON.stringify({ event: "editor_choice_fallback", simulation, message: error instanceof Error ? error.message : String(error) }));
     }
-    const copy = await provider.writeRecommendation(winner, recentSummary);
+    let copy: PublicRecommendationCopy;
+    try {
+      copy = await provider.writeRecommendation(winner, recentSummary);
+    } catch (error) {
+      console.error(JSON.stringify({ event: "copywriting_fallback", simulation, message: error instanceof Error ? error.message : String(error) }));
+      copy = fallbackRecommendationCopy(winner);
+    }
     return { runId, winner, whyWorthReading: copy.whyWorthReading, whyToday: copy.whyToday, keywords: copy.keywords };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
