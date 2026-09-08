@@ -2,7 +2,9 @@
 
 ## Current deployment
 
-Public automation was enabled on 2026-09-07. The first reliability/content-quality slice was deployed on **2026-09-08**, after additive migration **0012**, independent review, and 130 passing tests. Worker version: `cf7b3323-d03e-486b-8353-9a30966fb0d0`. Post-deployment checks confirmed 319 Ready articles, the unchanged public recommendation, eight simulation rows and eight simulation feedback entries. See [reliability-slice.md](reliability-slice.md) for legacy eligibility treatment, independent 00:30 refresh, concurrency safety, tests, and rollout precautions for in-flight workflows. No published history is automatically withdrawn or rewritten.
+The current Worker is **`1703800c-4f36-4cb0-967e-956636160c9d`**, deployed on **2026-09-08** with the second business-health/alert-lifecycle slice after migration **0013**, independent review and **177 passing tests**. Real manual health Workflow `verify-monitoring-2026-09-08` completed at 11:43:11 UTC; `/health` reports healthy and `/health/live` reports D1 liveness. Original recommendation, simulation, feedback and alert fields were compared to the pre-migration backup and are unchanged. Email stays disabled. The next full Daily and scheduled 06:30 health dispatch remain to be observed on 2026-09-09. See [monitoring-slice.md](monitoring-slice.md) for evidence, the guarded-concurrency fix and verification limits.
+
+Public automation was enabled on 2026-09-07. The first reliability/content-quality slice was deployed on **2026-09-08**, after additive migration **0012**, independent review, and 130 passing tests. First-slice Worker version (now superseded): `cf7b3323-d03e-486b-8353-9a30966fb0d0`. Post-deployment checks confirmed 319 Ready articles, the unchanged public recommendation, eight simulation rows and eight simulation feedback entries. See [reliability-slice.md](reliability-slice.md) for legacy eligibility treatment, independent 00:30 refresh, concurrency safety, tests, and rollout precautions for in-flight workflows. No published history is automatically withdrawn or rewritten.
 
 The production site is deployed at `https://read.zhuying.fun`. The public home page is available over HTTPS. `/admin` redirects to `/admin/`, which is protected by the configured Cloudflare Access application. Public daily and health handlers are controlled by `AUTOMATION_ENABLED`; backfill has its own switch. The historical records below describe prior stages and are superseded by the launch record and current reliability-slice notes where they differ.
 
@@ -14,7 +16,7 @@ The Cloudflare account currently has dedicated One Good Read resources:
 - R2: `one-good-read-content`
 - Vectorize: `one-good-read-articles`, 384 dimensions, cosine metric
 
-All D1 migrations through `0012_content_eligibility.sql` have been applied remotely. Migration 0012 was applied at 2026-09-08 03:44:18 UTC, after a private database backup and before Worker deployment.
+All D1 migrations through `0013_alert_lifecycle.sql` have been applied remotely. Migration 0012 was applied at 2026-09-08 03:44:18 UTC; additive migration 0013 was applied at 11:42:33 UTC. Each had a private database backup before application and preceded its Worker deployment. Keep additive columns and alert/heartbeat history if rolling back Worker code.
 
 ## Remaining activation inputs
 
@@ -84,7 +86,7 @@ Alerts always remain recorded in D1 even when email delivery is disabled or fail
 ## Scheduled tasks
 
 - `30 16 * * *`: 00:30 Asia/Shanghai. The scheduler launches daily selection and source/embedding refresh independently; refresh also runs above the 300-Ready reservoir target.
-- `30 22 * * *`: 06:30 Asia/Shanghai publication health check, R2 lifecycle cleanup, and storage-pressure alerting.
+- `30 22 * * *`: 06:30 Asia/Shanghai launches durable publication health, R2 cleanup and tracked-storage diagnosis through `BACKFILL_WORKFLOW` with `{healthCheck:true}`. It depends on public automation, not `BACKFILL_ENABLED`, and records heartbeat/component results and condition-scoped alert episodes. No additional cron or Workflow binding was added.
 
 ## R2 lifecycle
 

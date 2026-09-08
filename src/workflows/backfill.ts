@@ -1,12 +1,20 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { adapterIds, backfillMissingEmbeddings, ingestSource } from "./pipeline";
 import { assertStorageAllowsBackfill } from "../operations/storage";
+import { runOperationalHealthCheck } from "../operations/health";
 import { probeProductionAi } from "../operations/ai-probe";
 
-export interface BackfillWorkflowParams { sourceId?: string; limit?: number; pages?: number; embeddingsOnly?: boolean; aiProbe?: boolean; managed?: boolean; scheduledRefresh?: boolean; }
+export interface BackfillWorkflowParams { healthCheck?: boolean; sourceId?: string; limit?: number; pages?: number; embeddingsOnly?: boolean; aiProbe?: boolean; managed?: boolean; scheduledRefresh?: boolean; }
 
 export class BackfillWorkflow extends WorkflowEntrypoint<Env, BackfillWorkflowParams> {
   override async run(event: Readonly<WorkflowEvent<BackfillWorkflowParams>>, step: WorkflowStep): Promise<unknown> {
+    if (event.payload.healthCheck) {
+      if (String(this.env.AUTOMATION_ENABLED) !== "true") return { status: "disabled" };
+      return step.do("operational-health-check", { retries: { limit: 2, delay: "1 minute", backoff: "exponential" }, timeout: "10 minutes" }, async () => {
+        if (String(this.env.AUTOMATION_ENABLED) !== "true") return { status: "disabled" };
+        return runOperationalHealthCheck(this.env);
+      });
+    }
     if (event.payload.scheduledRefresh && String(this.env.BACKFILL_ENABLED) !== "true") return { status: "disabled" };
     if (event.payload.aiProbe) return step.do("production-ai-probe", { timeout: "5 minutes" }, async () => probeProductionAi(this.env));
     await step.do("storage-safety-check", async () => assertStorageAllowsBackfill(this.env));

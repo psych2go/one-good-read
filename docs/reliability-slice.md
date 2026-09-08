@@ -1,5 +1,7 @@
 # First reliability / content-quality slice
 
+Follow-up: [second monitoring / alert-lifecycle slice](monitoring-slice.md) was deployed and manually bootstrapped on 2026-09-08 after migration 0013 and 177 passing tests. Its business-health contract now supersedes the liveness-only `/health` interpretation used in the historical evidence below; `/health/live` provides D1 liveness.
+
 ## Status: deployed on 2026-09-08 after independent review
 
 This slice follows the 2026-09-08 audit of **Short Videos, Big Self-Control Problems**. The supplied 131-word page is predominantly a paper abstract plus attribution; its stored 8.25 quality score did not establish that the page was a standalone essay. The audit reported 319 Ready articles, all with embeddings, one public recommendation, and eight simulation feedback records. Post-deployment remote checks confirmed those counts and the original recommendation identity were preserved.

@@ -1,6 +1,5 @@
 import { reservoirInstanceId } from "../domain/cron";
 import { shanghaiDate } from "../domain/date";
-import { runOperationalHealthCheck } from "../operations/health";
 import { launchWorkflow } from "./launch";
 
 export function scheduleWorkflows(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
@@ -10,7 +9,7 @@ export function scheduleWorkflows(controller: ScheduledController, env: Env, ctx
     return;
   }
   if (controller.cron === "30 22 * * *") {
-    if (String(env.AUTOMATION_ENABLED) === "true") ctx.waitUntil(runOperationalHealthCheck(env));
+    if (String(env.AUTOMATION_ENABLED) === "true") ctx.waitUntil(launchWorkflow(env.BACKFILL_WORKFLOW, { id: `health-${shanghaiDate(new Date(controller.scheduledTime))}`, params: { healthCheck: true }, retention }));
     return;
   }
   if (controller.cron !== "30 16 * * *") return;

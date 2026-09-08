@@ -1,3 +1,5 @@
+import type { AlertRow, DeliveryReadiness } from "../operations/alerts";
+import type { BusinessHealth, readOperationalCheck } from "../operations/business-health";
 import type { ContentReviewQueue } from "../db/content-review";
 import { Layout } from "./layout";
 
@@ -15,12 +17,15 @@ interface SimulationRow {
 }
 
 interface AdminData {
+  health: BusinessHealth;
+  operationalCheck: Awaited<ReturnType<typeof readOperationalCheck>>;
+  deliveryReadiness: DeliveryReadiness;
   contentReview: ContentReviewQueue;
   automationEnabled: boolean;
   counts: { articles: number; ready: number; recommendations: number; failures: number; embeddings: number };
   preferenceModel?: { sample_count: number; max_influence: number; metrics: string; created_at: string };
   storage: { usedBytes: number; limitBytes: number; ratio: number; level: "ok" | "warning" | "critical"; objectCount: number };
-  alerts: Array<{ alert_type: string; severity: string; subject: string; delivery_status: string; created_at: string }>;
+  alerts: AlertRow[];
   reservoir?: { value: string; updated_at: string };
   simulation?: { value: string; updated_at: string };
   simulationRows: SimulationRow[];
@@ -34,6 +39,15 @@ export function AdminPage({ data }: { data: AdminData }) {
     <section class="admin-shell">
       <header class="page-intro"><p class="edition-label">CONTROL ROOM</p><h1>系统状态</h1><p>自动运行，人工只在需要时熔断。</p></header>
       <div class="metrics"><Metric label="已发现文章" value={data.counts.articles} /><Metric label="候选文章" value={data.counts.ready} /><Metric label="已发布" value={data.counts.recommendations} /><Metric label="失败任务" value={data.counts.failures} /><Metric label="Embedding" value={data.counts.embeddings} /></div>
+
+      <section class="admin-panel"><h2>业务健康 · {data.health.status}</h2>
+        <p>当前公开日期 {data.health.currentPublicDate ?? "无"} · 预期 {data.health.expectedPublicationDate} · 查询时间 {data.health.checkedAt}</p>
+        <p>开始 {data.health.checks.startedAt ?? "无"} · 完成 {data.health.checks.lastCompletedAt ?? "无"} · 失败 {data.health.checks.lastFailedAt ?? "无"} · 最近全部正常 {data.health.checks.lastSuccessfulAt ?? "无"}</p>
+        <pre>{JSON.stringify(data.health.components, null, 2)}</pre>
+        <details><summary>最近检查详细诊断（私有）</summary><pre>{JSON.stringify(data.operationalCheck.check, null, 2)}</pre></details>
+        <form method="post" action="/admin/run-health-check"><button disabled={!data.automationEnabled}>运行健康检查 / 初始化监控</button></form>
+        <p>邮件投递配置：{data.deliveryReadiness}。ready 仅表示配置齐备，不代表已验证送达。邮件域名接入、真实发送验证及投递重试尚未实施。</p>
+      </section>
 
       <section class="admin-panel"><h2>立即运行</h2><div class="action-row">
         <form method="post" action="/admin/run-daily"><button disabled={!data.automationEnabled}>{data.automationEnabled ? "从当前候选生成今日推荐" : "正式发布已锁定"}</button></form>
@@ -62,7 +76,13 @@ export function AdminPage({ data }: { data: AdminData }) {
       <section class="admin-panel"><h2>偏好模型</h2><p>{data.preferenceModel ? `${data.preferenceModel.sample_count} 条有效反馈 · 最大影响 ${(data.preferenceModel.max_influence * 100).toFixed(0)}% · ${data.preferenceModel.created_at}` : "有效反馈不足 10 条，个人模型尚未启用。模拟反馈也会计入样本。"}</p></section>
       <section class="admin-panel"><h2>来源健康</h2><div class="table-wrap"><table><thead><tr><th>来源</th><th>状态</th><th>上次扫描</th><th>连续失败</th><th>操作</th></tr></thead><tbody>{data.sources.map((source) => <tr><td>{source.name}</td><td>{source.status}</td><td>{source.last_scanned_at ?? "尚未扫描"}</td><td>{source.consecutive_failures}</td><td><form method="post" action={`/admin/backfill/${source.id}`}><button>回填</button></form></td></tr>)}</tbody></table></div></section>
       <section class="admin-panel"><h2>最近选文运行</h2><div class="table-wrap"><table><thead><tr><th>日期</th><th>状态</th><th>文章</th><th>说明</th></tr></thead><tbody>{data.runs.map((run) => <tr><td>{run.recommendation_date}</td><td>{run.status}</td><td>{run.winner_title ?? "—"}</td><td>{run.failure_reason ?? "—"}</td></tr>)}</tbody></table></div></section>
-      <section class="admin-panel"><h2>最近告警</h2><div class="table-wrap"><table><thead><tr><th>时间</th><th>级别</th><th>告警</th><th>投递</th></tr></thead><tbody>{data.alerts.map((alert) => <tr><td>{alert.created_at}</td><td>{alert.severity}</td><td>{alert.subject}</td><td>{alert.delivery_status}</td></tr>)}</tbody></table></div></section>
+      <section class="admin-panel"><h2>告警生命周期</h2><p>最多显示100条，未解决优先。确认不是恢复；historical 表示旧记录恢复情况未知。logged 表示尚未确认投递；failed 与 disabled 不代表已送达。</p>
+        {(["open", "acknowledged", "resolved", "historical"] as const).map((status) => <section><h3>{status}</h3><div class="table-wrap"><table><thead><tr><th>首次 / 最近 / 次数</th><th>级别 / 告警</th><th>投递</th><th>操作 / 恢复</th></tr></thead><tbody>{data.alerts.filter((alert) => alert.lifecycle_status === status).map((alert) => <tr>
+          <td>{alert.created_at}<br />{alert.last_seen_at ?? alert.created_at}<br />{alert.occurrence_count}</td>
+          <td>{alert.severity} · {alert.subject}<details><summary>详细诊断</summary><p>{alert.message}</p><p>{alert.delivery_error}</p></details></td>
+          <td>{alert.delivery_status}</td><td>{status === "open" && <form method="post" action={`/admin/alerts/${alert.id}/acknowledge`}><button>确认（不解决）</button></form>}{alert.acknowledged_at && <p>确认 {alert.acknowledged_at}</p>}{alert.resolved_at && <p>恢复 {alert.resolved_at}</p>}</td>
+        </tr>)}</tbody></table></div></section>)}
+      </section>
       <section class="admin-panel"><h2>正式推荐反馈</h2>{data.recommendations.map((item) => <div class="feedback-row"><div><strong>{item.recommendation_date} · {item.title}</strong><span>{item.author}{item.feedback_kind ? ` · 已反馈：${feedbackLabel(item.feedback_kind)}` : ""}{item.retry_count ? ` · 重试 ${item.retry_count}/2` : ""}</span></div><FeedbackButtons action={`/admin/recommendations/${item.id}/feedback`} selected={item.feedback_kind} /></div>)}</section>
     </section>
   </Layout>;

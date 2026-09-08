@@ -1,15 +1,77 @@
-import { shanghaiDate } from "../domain/date";
-import { sendOperationalAlert } from "./alerts";
+import { publicationHealth, type OperationalCheck } from "./business-health";
+import { resolveHealthAlert, sendOperationalAlert } from "./alerts";
 import { cleanupExpiredObjects, storageUsage } from "./storage";
 
-export async function runOperationalHealthCheck(env: Env): Promise<void> {
-  const date = shanghaiDate();
-  const recommendation = await env.DB.prepare("SELECT id FROM recommendations WHERE recommendation_date=? AND status='published' AND datetime(published_at) <= datetime('now')").bind(date).first<{ id: string }>();
-  if (!recommendation) await sendOperationalAlert(env, { dedupeKey: `missing-publication:${date}`, type: "missing_publication", severity: "critical", subject: `${date} 尚未发布`, message: `北京时间 06:30 健康检查时仍未找到 ${date} 的公开推荐。请检查 Daily Workflow、候选池和 AI 服务。` });
-  const cleanup = await cleanupExpiredObjects(env, 100);
-  if (cleanup.failed) await sendOperationalAlert(env, { dedupeKey: `cleanup-failed:${date}`, type: "cleanup_failed", severity: "warning", subject: "R2 生命周期清理失败", message: `${cleanup.failed} 个过期对象删除失败；已成功删除 ${cleanup.deleted} 个。` });
-  const usage = await storageUsage(env);
-  if (usage.level !== "ok") await sendOperationalAlert(env, { dedupeKey: `storage-${usage.level}:${date}`, type: "storage_pressure", severity: usage.level, subject: `R2 存储达到 ${(usage.ratio * 100).toFixed(1)}%`, message: `已跟踪 ${usage.objectCount} 个对象，占用 ${formatBytes(usage.usedBytes)} / ${formatBytes(usage.limitBytes)}。${usage.level === "critical" ? "历史回填已暂停。" : "请关注增长速度。"}` });
+/** A single retried Workflow step: each attempt starts durably, all components are diagnosed independently. */
+export async function runOperationalHealthCheck(env: Env): Promise<OperationalCheck> {
+  const check: OperationalCheck = { id: crypto.randomUUID(), startedAt: new Date().toISOString(), completedAt: null, failedAt: null, status: "running", error: null,
+    components: { publication: { status: "running", reason: "check_running" }, cleanup: { status: "running", reason: "check_running" }, storage: { status: "running", reason: "check_running" } }, errors: {}, observations: {} };
+  try {
+    await env.DB.prepare(`INSERT INTO system_state (key,value,updated_at) VALUES ('operational_health',?,CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP
+      WHERE json_extract(system_state.value,'$.startedAt')<=json_extract(excluded.value,'$.startedAt')`)
+      .bind(JSON.stringify(check)).run();
+    const failures: unknown[] = [];
+    const diagnose = async (name: keyof OperationalCheck["components"], action: () => Promise<void>) => {
+      try { await action(); }
+      catch (error) { failures.push(error); check.components[name] = { status: "error", reason: `${name}_check_failed` }; check.errors[name] = error instanceof Error ? error.message : String(error); }
+    };
+    await diagnose("publication", async () => {
+      const publication = await publicationHealth(env, new Date());
+      check.components.publication = publication.component;
+      check.observations.publication = { expectedDate: publication.expectedDate, currentPublicDate: publication.currentPublicDate };
+      const key = `health:publication:${publication.expectedDate}`;
+      if (publication.component.status === "missing") await sendOperationalAlert(env, { dedupeKey: key, managedCondition: "publication", healthCheckId: check.id, type: "missing_publication", severity: "critical", subject: `${publication.expectedDate} 尚未发布`, message: `健康检查未找到 ${publication.expectedDate} 的可见公开推荐。请检查 Daily Workflow 和候选池。` });
+      // Date-specific evidence only: never claim that an earlier missing date was backfilled.
+      if (publication.component.status === "ok") await resolveHealthAlert(env, "publication", key, check.id);
+    });
+    await diagnose("cleanup", async () => {
+      const cleanup = await cleanupExpiredObjects(env, 100);
+      check.observations.cleanup = cleanup;
+      check.components.cleanup = { status: cleanup.failed ? "error" : "ok", reason: cleanup.failed ? "cleanup_failed" : "cleanup_completed" };
+      if (cleanup.failed) {
+        await sendOperationalAlert(env, { dedupeKey: "health:cleanup", managedCondition: "cleanup", healthCheckId: check.id, type: "cleanup_failed", severity: "warning", subject: "R2 生命周期清理失败", message: `${cleanup.failed} 个过期对象删除失败；已成功删除 ${cleanup.deleted} 个。` });
+        throw new Error(`${cleanup.failed} expired objects could not be deleted`);
+      }
+      const remaining = await env.DB.prepare("SELECT count(*) count FROM stored_objects WHERE deleted_at IS NULL AND expires_at IS NOT NULL AND datetime(expires_at)<=datetime('now')").first<{ count: number }>();
+      check.observations.cleanup.remaining = remaining?.count ?? 0;
+      if (remaining?.count) check.components.cleanup = { status: "warning", reason: "cleanup_backlog_remaining" };
+      else await resolveHealthAlert(env, "cleanup", "health:cleanup", check.id);
+    });
+    await diagnose("storage", async () => {
+      const usage = await storageUsage(env);
+      check.observations.storage = usage;
+      check.components.storage = { status: usage.level, reason: `tracked_storage_${usage.level}` };
+      if (usage.level !== "ok") await sendOperationalAlert(env, { dedupeKey: "health:storage", managedCondition: "storage", healthCheckId: check.id, type: "storage_pressure", severity: usage.level, subject: `R2 存储达到 ${(usage.ratio * 100).toFixed(1)}%`, message: `已跟踪 ${usage.objectCount} 个对象，占用 ${formatBytes(usage.usedBytes)} / ${formatBytes(usage.limitBytes)}。仅跟踪用量，不是实时 R2 可达性测试。` });
+      else await resolveHealthAlert(env, "storage", "health:storage", check.id);
+    });
+    const finishedAt = new Date().toISOString();
+    check.status = failures.length ? "failed" : "completed";
+    if (failures.length) check.failedAt = finishedAt; else check.completedAt = finishedAt;
+    const writes = [timestampStatement(env, failures.length ? "operational_health_failed" : "operational_health_completed", finishedAt, check.id), env.DB.prepare(`UPDATE system_state SET value=?,updated_at=CURRENT_TIMESTAMP
+      WHERE key='operational_health' AND json_extract(value,'$.id')=?`).bind(JSON.stringify(check), check.id)];
+    if (!failures.length && Object.values(check.components).every((component) => component.status === "ok")) {
+      writes.push(timestampStatement(env, "operational_health_success", finishedAt, check.id));
+    }
+    await env.DB.batch(writes);
+    if (failures.length) throw failures[0]; // Workflow retries; a failed cleanup cannot suppress publication diagnosis.
+    return check;
+  } catch (error) {
+    check.status = "failed"; check.completedAt = null; check.failedAt = new Date().toISOString();
+    check.error = error instanceof Error ? error.message : String(error);
+    try {
+      await env.DB.batch([env.DB.prepare(`INSERT INTO system_state (key,value,updated_at) VALUES ('operational_health',?,CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP
+        WHERE json_extract(system_state.value,'$.id')=? OR json_extract(system_state.value,'$.startedAt')<json_extract(excluded.value,'$.startedAt')`)
+        .bind(JSON.stringify(check), check.id), timestampStatement(env, "operational_health_failed", check.failedAt, check.id)]);
+    } catch { console.error(JSON.stringify({ event: "health_failure_record_unavailable", checkId: check.id })); }
+    throw error;
+  }
+}
+function timestampStatement(env: Env, key: string, timestamp: string, healthCheckId: string) {
+  return env.DB.prepare(`INSERT INTO system_state (key,value,updated_at)
+    SELECT ?,?,CURRENT_TIMESTAMP WHERE EXISTS (SELECT 1 FROM system_state WHERE key='operational_health' AND json_extract(value,'$.id')=?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP WHERE system_state.value<excluded.value`).bind(key, timestamp, healthCheckId);
 }
 function formatBytes(value: number): string { return `${(value / 1024 / 1024).toFixed(1)} MiB`; }
 

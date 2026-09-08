@@ -18,7 +18,14 @@
       -> validated copy / transactional winner-only recommendation in D1
       -> public queries hide the row until 06:00
 
+06:30 Shanghai Cron Trigger (AUTOMATION_ENABLED, independent of BACKFILL_ENABLED)
+  -> BackfillWorkflow {healthCheck:true}, before all ingestion/storage guards
+      -> durable operational-health-check step / persisted started and terminal heartbeat
+      -> publication / bounded R2 cleanup / tracked-storage diagnosis
+      -> persisted alert episodes / current-attempt guarded recovery
+
 Worker
+  -> read-only business /health and D1 /health/live
   -> public SSR pages
   -> Archive and sitemap
   -> Access-protected admin routes
@@ -28,6 +35,8 @@ Worker
 ```
 
 The first reliability slice above was deployed on 2026-09-08 after migration 0012, independent review, and 130 passing tests. See [reliability-slice.md](reliability-slice.md) for transitional legacy coverage, rollout evidence, and remaining runtime validation.
+
+The second monitoring slice was deployed and manually bootstrapped on 2026-09-08 after additive migration 0013, independent review and 177 passing tests. Attempt IDs atomically guard both heartbeat timestamps and health-managed incident transitions against stale overlapping checks. See [monitoring-slice.md](monitoring-slice.md) for Shanghai deadlines, alert episodes, public privacy, production evidence and remaining scheduled-run verification.
 
 ## Boundaries
 
