@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fallbackRecommendationCopy } from "../src/ai/fallback-copy";
+import { assertPublicRecommendationCopy } from "../src/ai/validate-copy";
 import type { RankedCandidate } from "../src/domain/types";
 
 function candidate(overrides: Partial<RankedCandidate> = {}): RankedCandidate {
@@ -48,6 +49,21 @@ describe("fallback recommendation copy", () => {
   it("uses the exploration wording for unfamiliar themes", () => {
     const copy = fallbackRecommendationCopy(candidate({ explorationBonus: 0.5 }));
     expect(copy.whyToday).toContain("探索空间");
+  });
+
+  it.each([
+    ["判断", "判断", "判断"],
+    [" 判断 ", "判断", " "],
+    ["", " ", "x".repeat(81)],
+    ["阅读", "阅读", "阅读"],
+  ])("keeps fallback copy valid after normalizing sparse keywords: %j", (...keywords) => {
+    const base = candidate();
+    base.analysis.keywords = keywords;
+    const copy = fallbackRecommendationCopy(base);
+    expect(() => assertPublicRecommendationCopy(copy)).not.toThrow();
+    expect(copy.keywords.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(copy.keywords).size).toBe(copy.keywords.length);
+    expect(copy.keywords.every((keyword) => keyword === keyword.trim())).toBe(true);
   });
 
   it("deduplicates keywords and caps at five", () => {

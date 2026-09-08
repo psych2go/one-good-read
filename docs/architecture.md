@@ -1,19 +1,22 @@
 # Architecture
 
 ```text
-Cron Trigger
-  -> DailyReadingWorkflow
-      -> source adapters
-      -> B2 standalone-content gate
+00:30 Shanghai Cron Trigger
+  -> independent BackfillWorkflow (when BACKFILL_ENABLED)
+      -> active source adapters / current discovery (also above reservoir target)
+      -> deterministic content gate
       -> private normalized text in R2
-      -> blind + contextual AI analysis
-      -> D1 versioned analysis
-      -> R2 + Vectorize full embedding
-      -> D1 semantic projection
+      -> blind body eligibility + quality / contextual analysis
+      -> D1 versioned analysis + eligibility / rejected review queue
+      -> R2 + Vectorize full embedding / D1 projection
+  -> independent DailyReadingWorkflow (when AUTOMATION_ENABLED)
+      -> wait until 05:30
+      -> stored eligibility + conservative legacy screen (no fresh body/AI gating)
       -> confidence-gated preference model
       -> deterministic, diversified Top 10
-      -> AI editorial choice
-      -> scheduled recommendation in D1
+      -> link verification / AI editorial choice and copy with fallback
+      -> validated copy / transactional winner-only recommendation in D1
+      -> public queries hide the row until 06:00
 
 Worker
   -> public SSR pages
@@ -23,6 +26,8 @@ Worker
   -> Access JWT verification
   -> storage lifecycle and operational alerts
 ```
+
+The first reliability slice above was deployed on 2026-09-08 after migration 0012, independent review, and 130 passing tests. See [reliability-slice.md](reliability-slice.md) for transitional legacy coverage, rollout evidence, and remaining runtime validation.
 
 ## Boundaries
 
@@ -37,12 +42,13 @@ Worker
 
 - Article IDs are stable hashes of canonical URLs.
 - `(article_id, analysis_version)` is unique.
-- Recommendation dates are unique.
+- Recommendation dates are unique; only the actual inserted winner changes article/retention state, and losing runs return the stored publication result. Withdrawn dates are not automatically republished.
 - Workflow instance IDs include their logical date or a random backfill ID.
 - Selection runs and candidate snapshots are immutable audit records.
 
 ## Production hardening still planned
 
 - Confirm a compliant free full-text discovery path for Bloomberg Money Stuff; the other allowlisted source groups now have adapters.
-- Onboard the final domain in Cloudflare Access and Email Sending, then enable the already implemented bindings and variables.
+- Access is configured; external Email Sending/domain onboarding and actual alert delivery remain deferred.
+- AI circuit breaker/quota coordination, broad legacy body review, and further diversity/preference-model work remain deferred.
 - Split large analysis artifacts from D1 into R2 before approaching the free D1 per-database limit.

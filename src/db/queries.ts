@@ -21,18 +21,18 @@ const BASE_SELECT = `
   FROM recommendations r
   JOIN articles a ON a.id=r.article_id
   JOIN analyses n ON n.id=(SELECT n2.id FROM analyses n2 WHERE n2.article_id=a.id ORDER BY n2.created_at DESC LIMIT 1)
-  WHERE r.status='published' AND datetime(r.published_at) <= datetime('now')
+  WHERE r.status='published' AND datetime(r.published_at) <= datetime(?)
 `;
 
-export async function latestRecommendation(db: D1Database): Promise<RecommendationPageRow | null> {
-  return db.prepare(`${BASE_SELECT} ORDER BY r.recommendation_date DESC LIMIT 1`).first<RecommendationPageRow>();
+export async function latestRecommendation(db: D1Database, now = new Date().toISOString()): Promise<RecommendationPageRow | null> {
+  return db.prepare(`${BASE_SELECT} ORDER BY r.recommendation_date DESC LIMIT 1`).bind(now).first<RecommendationPageRow>();
 }
 
-export async function recommendationByDate(db: D1Database, date: string): Promise<RecommendationPageRow | null> {
-  return db.prepare(`${BASE_SELECT} AND r.recommendation_date=? LIMIT 1`).bind(date).first<RecommendationPageRow>();
+export async function recommendationByDate(db: D1Database, date: string, now = new Date().toISOString()): Promise<RecommendationPageRow | null> {
+  return db.prepare(`${BASE_SELECT} AND r.recommendation_date=? LIMIT 1`).bind(now, date).first<RecommendationPageRow>();
 }
 
-export async function archiveRecommendations(db: D1Database, input: { page: number; author?: string; theme?: string; year?: string }): Promise<{ rows: RecommendationPageRow[]; hasNext: boolean }> {
+export async function archiveRecommendations(db: D1Database, input: { page: number; author?: string; theme?: string; year?: string }, now = new Date().toISOString()): Promise<{ rows: RecommendationPageRow[]; hasNext: boolean }> {
   const conditions: string[] = [];
   const bindings: unknown[] = [];
   if (input.author) { conditions.push("a.author=?"); bindings.push(input.author); }
@@ -42,15 +42,15 @@ export async function archiveRecommendations(db: D1Database, input: { page: numb
   const limit = 21;
   const offset = Math.max(0, input.page - 1) * 20;
   const result = await db.prepare(`${BASE_SELECT}${extra} ORDER BY r.recommendation_date DESC LIMIT ? OFFSET ?`)
-    .bind(...bindings, limit, offset).all<RecommendationPageRow>();
+    .bind(now, ...bindings, limit, offset).all<RecommendationPageRow>();
   return { rows: result.results.slice(0, 20), hasNext: result.results.length > 20 };
 }
 
-export async function archiveFacets(db: D1Database): Promise<{ authors: string[]; themes: string[]; years: string[] }> {
+export async function archiveFacets(db: D1Database, now = new Date().toISOString()): Promise<{ authors: string[]; themes: string[]; years: string[] }> {
   const [authors, themes, years] = await Promise.all([
-    db.prepare("SELECT DISTINCT a.author value FROM recommendations r JOIN articles a ON a.id=r.article_id WHERE r.status='published' ORDER BY value").all<{ value: string }>(),
-    db.prepare("SELECT DISTINCT n.primary_theme value FROM recommendations r JOIN analyses n ON n.article_id=r.article_id WHERE r.status='published' ORDER BY value").all<{ value: string }>(),
-    db.prepare("SELECT DISTINCT substr(recommendation_date,1,4) value FROM recommendations WHERE status='published' ORDER BY value DESC").all<{ value: string }>(),
+    db.prepare("SELECT DISTINCT a.author value FROM recommendations r JOIN articles a ON a.id=r.article_id WHERE r.status='published' AND datetime(r.published_at) <= datetime(?) ORDER BY value").bind(now).all<{ value: string }>(),
+    db.prepare("SELECT DISTINCT n.primary_theme value FROM recommendations r JOIN analyses n ON n.article_id=r.article_id WHERE r.status='published' AND datetime(r.published_at) <= datetime(?) ORDER BY value").bind(now).all<{ value: string }>(),
+    db.prepare("SELECT DISTINCT substr(recommendation_date,1,4) value FROM recommendations WHERE status='published' AND datetime(published_at) <= datetime(?) ORDER BY value DESC").bind(now).all<{ value: string }>(),
   ]);
   return { authors: authors.results.map((x) => x.value), themes: themes.results.map((x) => x.value), years: years.results.map((x) => x.value) };
 }

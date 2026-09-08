@@ -2,7 +2,9 @@
 
 ## Current deployment
 
-The production safe shell is deployed at `https://read.zhuying.fun`. The public home page is available over HTTPS. `/admin` redirects to `/admin/`, which is protected by the configured Cloudflare Access application. Scheduled handlers are deployed but return immediately while `AUTOMATION_ENABLED=false`.
+Public automation was enabled on 2026-09-07. The first reliability/content-quality slice was deployed on **2026-09-08**, after additive migration **0012**, independent review, and 130 passing tests. Worker version: `cf7b3323-d03e-486b-8353-9a30966fb0d0`. Post-deployment checks confirmed 319 Ready articles, the unchanged public recommendation, eight simulation rows and eight simulation feedback entries. See [reliability-slice.md](reliability-slice.md) for legacy eligibility treatment, independent 00:30 refresh, concurrency safety, tests, and rollout precautions for in-flight workflows. No published history is automatically withdrawn or rewritten.
+
+The production site is deployed at `https://read.zhuying.fun`. The public home page is available over HTTPS. `/admin` redirects to `/admin/`, which is protected by the configured Cloudflare Access application. Public daily and health handlers are controlled by `AUTOMATION_ENABLED`; backfill has its own switch. The historical records below describe prior stages and are superseded by the launch record and current reliability-slice notes where they differ.
 
 ## Provisioned resources
 
@@ -12,7 +14,7 @@ The Cloudflare account currently has dedicated One Good Read resources:
 - R2: `one-good-read-content`
 - Vectorize: `one-good-read-articles`, 384 dimensions, cosine metric
 
-All D1 migrations through `0007_retry_storage_alerts.sql` have been applied remotely.
+All D1 migrations through `0012_content_eligibility.sql` have been applied remotely. Migration 0012 was applied at 2026-09-08 03:44:18 UTC, after a private database backup and before Worker deployment.
 
 ## Remaining activation inputs
 
@@ -81,7 +83,7 @@ Alerts always remain recorded in D1 even when email delivery is disabled or fail
 
 ## Scheduled tasks
 
-- `30 16 * * *`: 00:30 Asia/Shanghai discovery and daily workflow.
+- `30 16 * * *`: 00:30 Asia/Shanghai. The scheduler launches daily selection and source/embedding refresh independently; refresh also runs above the 300-Ready reservoir target.
 - `30 22 * * *`: 06:30 Asia/Shanghai publication health check, R2 lifecycle cleanup, and storage-pressure alerting.
 
 ## R2 lifecycle
@@ -98,7 +100,7 @@ The application tracks private object sizes in D1.
 
 The configured free-plan safety limit is `10,000,000,000` bytes.
 
-## Production AI validation
+## Historical production AI validation
 
 On August 27, 2026, the configured relay and model passed the remote production probe:
 
@@ -112,7 +114,7 @@ Three initial articles were processed end to end. A subsequent controlled backfi
 
 Production source discovery now supports WordPress feed pages, Blogger `start-index`, Squarespace RSS pages, and Substack archive metadata. Substack remains RSS-first: if the archive API returns 403/429 from a Worker egress IP, history expansion stops gracefully without blocking recent articles or leaving a Workflow in a long retry wait. Historical free posts fall back from the Substack post API to the public `.available-content` HTML body when needed.
 
-## Reservoir coordinator
+## Historical Reservoir coordinator rollout
 
 A dedicated `one-good-read-reservoir` Workflow runs at minute 15 of every hour while `BACKFILL_ENABLED=true`.
 
@@ -161,7 +163,7 @@ The production gate was verified with 52 Ready articles: the Workflow completed 
 
 The real simulation then ran for eight consecutive days from 2026-08-29 to 2026-09-05 with one administrator feedback label per day (three valuable, four good, one unfinished) and no negative labels. `simulation_status.ready=true` and the private `simulation_ready` alert fired on 2026-09-04.
 
-Two later runs (2026-09-06 and 2026-09-07) failed with relay-wide `429 model_cooldown` errors: the shared relay credentials had exhausted their usage limit before the 05:30 selection window. The retry ladder (21:30, 21:45, 22:15 UTC) behaved correctly but could not outlast a multi-hour cooldown. Because the same shared relay can be cooled down by other users, `provider.writeRecommendation` now falls back to the deterministic heuristic copy instead of failing the whole selection run (`copywriting_fallback` event); the AI editor choice already had this fallback. With both fallbacks in place, a relay outage degrades copy quality for one day but can no longer stop publication.
+Two later runs (2026-09-06 and 2026-09-07) failed with relay-wide `429 model_cooldown` errors: the shared relay credentials had exhausted their usage limit before the 05:30 selection window. The retry ladder (21:30, 21:45, 22:15 UTC) behaved correctly but could not outlast a multi-hour cooldown. The logs do not identify which workloads exhausted the relay quota. `provider.writeRecommendation` now falls back to deterministic copy on request failure (`copywriting_fallback` event); the AI editor choice already had this fallback. The 2026-09-08 reliability slice also decouples replenishment and validates fallback keywords. These measures reduce AI-outage publication failures, but unavailable links, database failures, invalid returned copy, or an exhausted eligible pool can still prevent publication.
 
 ## Launch
 

@@ -14,7 +14,7 @@ One Good Read publishes one public recommendation every day at 06:00 Asia/Shangh
 
 ## Eligibility
 
-A candidate must be freely readable without login, have a complete standalone text, pass extraction confidence, and receive a full-text analysis. Link roundups, pure audio/video pages, announcements, previews, and paywalled or registration-only content are excluded.
+A candidate must be freely readable without login, have a complete standalone text, pass extraction confidence, and receive a full-text analysis. Link roundups, abstract/quotation introductions without an independent essay, pure audio/video pages, announcements, previews, and paywalled or registration-only content are excluded. Eligibility is separate from numeric quality: high scores cannot override a nonstandalone body, while genuinely self-contained short or quote-heavy essays remain allowed. The locally implemented first slice uses validated body evidence for new analyses and conservatively screens legacy stored evidence; remaining legacy unknowns are provisional, not verified. See `reliability-slice.md` for the transitional coverage and deployment status.
 
 ## Intrinsic quality
 
@@ -50,7 +50,7 @@ Only “Later” permits automatic reappearance, after at least 14 days and at m
 
 ## Operations
 
-- 00:30 Asia/Shanghai: discover new articles.
+- 00:30 Asia/Shanghai: independently launch refresh and the prepared-pool Daily Workflow; refresh failures must not gate publication.
 - 05:30: freeze candidates and select.
 - 06:00: make the scheduled recommendation visible.
 - Publication failure falls back through precomputed candidates; total failure leaves the last successful dated recommendation visible and raises an operational alert.

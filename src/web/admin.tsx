@@ -1,3 +1,4 @@
+import type { ContentReviewQueue } from "../db/content-review";
 import { Layout } from "./layout";
 
 interface SimulationRow {
@@ -14,6 +15,7 @@ interface SimulationRow {
 }
 
 interface AdminData {
+  contentReview: ContentReviewQueue;
   automationEnabled: boolean;
   counts: { articles: number; ready: number; recommendations: number; failures: number; embeddings: number };
   preferenceModel?: { sample_count: number; max_influence: number; metrics: string; created_at: string };
@@ -54,6 +56,9 @@ export function AdminPage({ data }: { data: AdminData }) {
         </article>)}</div>
       </section>
 
+      <section class="admin-panel"><h2>内容资格复核（只读）</h2><p>待复核 {data.contentReview.total} 篇（最多显示100篇）。旧分析未知资格且未发现明确反证的 Ready：{data.contentReview.legacyUnknownReady} 篇；仅暂时可选，不代表已验证。已发布历史不自动撤回或改写。</p>
+        {data.contentReview.rows.map((row) => <details><summary>{row.title} · {row.status} · {row.reason}</summary><p>{row.id}</p><pre>{row.eligibility ?? "legacy_unknown"}</pre><pre>{row.evidence}</pre></details>)}
+      </section>
       <section class="admin-panel"><h2>偏好模型</h2><p>{data.preferenceModel ? `${data.preferenceModel.sample_count} 条有效反馈 · 最大影响 ${(data.preferenceModel.max_influence * 100).toFixed(0)}% · ${data.preferenceModel.created_at}` : "有效反馈不足 10 条，个人模型尚未启用。模拟反馈也会计入样本。"}</p></section>
       <section class="admin-panel"><h2>来源健康</h2><div class="table-wrap"><table><thead><tr><th>来源</th><th>状态</th><th>上次扫描</th><th>连续失败</th><th>操作</th></tr></thead><tbody>{data.sources.map((source) => <tr><td>{source.name}</td><td>{source.status}</td><td>{source.last_scanned_at ?? "尚未扫描"}</td><td>{source.consecutive_failures}</td><td><form method="post" action={`/admin/backfill/${source.id}`}><button>回填</button></form></td></tr>)}</tbody></table></div></section>
       <section class="admin-panel"><h2>最近选文运行</h2><div class="table-wrap"><table><thead><tr><th>日期</th><th>状态</th><th>文章</th><th>说明</th></tr></thead><tbody>{data.runs.map((run) => <tr><td>{run.recommendation_date}</td><td>{run.status}</td><td>{run.winner_title ?? "—"}</td><td>{run.failure_reason ?? "—"}</td></tr>)}</tbody></table></div></section>

@@ -1,3 +1,4 @@
+import { CONTENT_FORMATS, ELIGIBILITY_VERSION, invalidContentEligibility, parseContentEligibility } from "../domain/content-gate";
 import { weightedIntrinsicScore } from "../domain/scoring";
 import { apiEndpoint } from "./base-url";
 import type { ArticleAnalysis, ExtractedArticle, PublicRecommendationCopy, RankedCandidate } from "../domain/types";
@@ -27,6 +28,7 @@ export class OpenAiProvider implements AiProvider {
       `你是长期阅读策展编辑。结合作者、发布日期和盲评结果进行主题与上下文判断。规范主题只能从给定列表中选择：${THEMES.join("、")}。不得因为作者知名度提高内在质量分。`,
       JSON.stringify({ title: article.title, author: article.author, publishedAt: article.publishedAt, url: article.canonicalUrl, blind }),
     );
+    const contentEligibility = parseContentEligibility(blind.contentEligibility, article.text) ?? invalidContentEligibility();
     const scores = {
       longTermValue: blind.longTermValue,
       ideaDensity: blind.ideaDensity,
@@ -35,6 +37,7 @@ export class OpenAiProvider implements AiProvider {
       clarityStructure: blind.clarityStructure,
     };
     return {
+      contentEligibility,
       articleId: context.articleId,
       analysisVersion: context.analysisVersion,
       provider: this.name,
@@ -92,7 +95,7 @@ export class OpenAiProvider implements AiProvider {
     return this.callJson<BlindResult>(
       "article_blind_synthesis",
       blindSchema,
-      "你是长文总评编辑。根据所有分段分析形成整篇文章的盲评。不要机械平均；考虑观点如何跨段展开、重复、深化或受限。分数使用0到10，证据总结必须覆盖整篇，不得根据作者声誉。",
+      `${BLIND_SYSTEM_PROMPT} 你是长文总评编辑。根据所有分段分析形成整篇文章的盲评。不要机械平均；考虑观点如何跨段展开、重复、深化或受限。资格判断针对整篇，不因单段引用而拒绝完整文章。bodyEvidence 保留分段中的正文原句。`,
       JSON.stringify({ totalCharacters: text.length, chunks: chunkResults }),
     );
   }
@@ -131,7 +134,10 @@ export class OpenAiProvider implements AiProvider {
   }
 }
 
-const BLIND_SYSTEM_PROMPT = "你是严谨的文章编辑。只根据正文盲评，不根据作者声誉。分数使用0到10。必须阅读全文，区分长期价值、思想密度、论证质量、原创性、表达结构。";
+const BLIND_SYSTEM_PROMPT = `你是严谨的文章编辑。只根据正文盲评，不根据作者声誉。分数使用0到10。必须阅读全文，区分长期价值、思想密度、论证质量、原创性、表达结构。
+独立判断 contentEligibility，version 必须是 ${ELIGIBILITY_VERSION}。只看提供的正文，不推测链接目标内容。
+standalone_essay 必须在正文内独立展开观点、理由或观察。摘要/论文摘要选 abstract；大段引用后仅附作者归属、链接或简短引荐选 quotation_introduction；链接合集选 roundup；不完整/截断/付费预览选 preview；以音视频为主选 media；无法确定选 uncertain。
+高质量研究、知名作者、高分不能覆盖非独立文章资格。没有最低字数：短但自洽的随笔可以通过；含大量引用但有作者自身展开的论证的完整文章也可以通过。reason 说明正文依据，bodyEvidence 引用1至5个正文原句（每条不超过1000字符），不得虚构。`;
 
 export function chunkForAnalysis(text: string, maxChars = 18_000, overlap = 500): string[] {
   if (text.length <= maxChars) return [text];
@@ -152,10 +158,11 @@ export function chunkForAnalysis(text: string, maxChars = 18_000, overlap = 500)
 
 function wait(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 
-interface BlindResult { longTermValue: number; ideaDensity: number; argumentQuality: number; originality: number; clarityStructure: number; confidence: number; evidence: string[]; riskNotes: string[]; }
+interface BlindResult { contentEligibility: unknown; longTermValue: number; ideaDensity: number; argumentQuality: number; originality: number; clarityStructure: number; confidence: number; evidence: string[]; riskNotes: string[]; }
 interface ContextResult { primaryTheme: string; secondaryThemes: string[]; keywords: string[]; confidence: number; contextSummary: string; }
 
 const score = { type: "number", minimum: 0, maximum: 10 };
-const blindSchema = { type: "object", additionalProperties: false, required: ["longTermValue","ideaDensity","argumentQuality","originality","clarityStructure","confidence","evidence","riskNotes"], properties: { longTermValue: score, ideaDensity: score, argumentQuality: score, originality: score, clarityStructure: score, confidence: { type: "number", minimum: 0, maximum: 1 }, evidence: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } }, riskNotes: { type: "array", maxItems: 5, items: { type: "string" } } } };
+const eligibilitySchema = { type: "object", additionalProperties: false, required: ["version", "format", "reason", "bodyEvidence"], properties: { version: { type: "string", enum: [ELIGIBILITY_VERSION] }, format: { type: "string", enum: CONTENT_FORMATS }, reason: { type: "string", minLength: 1, maxLength: 1000 }, bodyEvidence: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", minLength: 1, maxLength: 1000 } } } };
+const blindSchema = { type: "object", additionalProperties: false, required: ["contentEligibility","longTermValue","ideaDensity","argumentQuality","originality","clarityStructure","confidence","evidence","riskNotes"], properties: { contentEligibility: eligibilitySchema, longTermValue: score, ideaDensity: score, argumentQuality: score, originality: score, clarityStructure: score, confidence: { type: "number", minimum: 0, maximum: 1 }, evidence: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } }, riskNotes: { type: "array", maxItems: 5, items: { type: "string" } } } };
 const contextSchema = { type: "object", additionalProperties: false, required: ["primaryTheme","secondaryThemes","keywords","confidence","contextSummary"], properties: { primaryTheme: { type: "string", enum: THEMES }, secondaryThemes: { type: "array", maxItems: 3, items: { type: "string", enum: THEMES } }, keywords: { type: "array", minItems: 3, maxItems: 5, items: { type: "string" } }, confidence: { type: "number", minimum: 0, maximum: 1 }, contextSummary: { type: "string" } } };
 function minimalCandidate(candidate: RankedCandidate) { return { articleId: candidate.articleId, title: candidate.title, author: candidate.author, publishedAt: candidate.publishedAt, readingMinutes: candidate.readingMinutes, intrinsicScore: candidate.analysis.intrinsicScore, scores: candidate.analysis.scores, primaryTheme: candidate.analysis.primaryTheme, secondaryThemes: candidate.analysis.secondaryThemes, evidence: candidate.analysis.evidence, riskNotes: candidate.analysis.riskNotes, dynamicScore: candidate.dynamicScore, scoreExplanation: candidate.explanation }; }

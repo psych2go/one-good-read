@@ -34,6 +34,7 @@ export class HeuristicAiProvider implements AiProvider {
     const primaryTheme = THEMES.find(([, pattern]) => pattern.test(`${article.title} ${article.text.slice(0, 6000)}`))?.[0] ?? "学习与知识";
     const secondaryThemes = THEMES.filter(([theme, pattern]) => theme !== primaryTheme && pattern.test(article.text.slice(0, 10000))).slice(0, 3).map(([theme]) => theme);
     return {
+      contentEligibility: { version: "standalone-v1", format: "uncertain", reason: "Development heuristic cannot verify standalone content; use a validated analysis provider.", bodyEvidence: [article.text.slice(0, 180)] },
       articleId: context.articleId,
       analysisVersion: context.analysisVersion,
       provider: this.name,

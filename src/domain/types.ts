@@ -37,7 +37,16 @@ export interface IntrinsicScores {
   clarityStructure: number;
 }
 
+export interface ContentEligibility {
+  version: "standalone-v1";
+  format: "standalone_essay" | "abstract" | "quotation_introduction" | "roundup" | "preview" | "media" | "uncertain";
+  reason: string;
+  bodyEvidence: string[];
+}
+
 export interface ArticleAnalysis {
+  /** Undefined only for legacy analyses; never means verified standalone. */
+  contentEligibility?: ContentEligibility;
   articleId: string;
   analysisVersion: string;
   provider: string;

@@ -1,21 +1,23 @@
 import { aiProvider } from "../ai";
+import { assertPublicRecommendationCopy } from "../ai/validate-copy";
 import { fallbackRecommendationCopy } from "../ai/fallback-copy";
 import type { PublicRecommendationCopy } from "../domain/types";
 import { backfillMissingEmbeddings, createAndStoreEmbedding, projectionMap } from "../embeddings/service";
 import { getOrTrainPreferenceModel, loadActivePreferenceModel, predictPersonalFit } from "../preferences/model";
 import { semanticSignals } from "../preferences/semantic";
 import { sendOperationalAlert } from "../operations/alerts";
-import { contentRejectionReason } from "../domain/content-gate";
+import { analysisContentRejectionReason, contentRejectionReason, legacyContentRejectionReason, invalidContentEligibility, parseContentEligibility } from "../domain/content-gate";
 import { normalizeArticleUrl } from "../domain/url";
 import { diverseTop, passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
 import type { DiscoveredArticle, RankedCandidate } from "../domain/types";
+import type { PublicationResult } from "../db/repository";
 import { annotateSelectionRun, createSelectionRun, DuplicateContentError, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, saveSimulationRecommendation, upsertDiscovered, markRejected } from "../db/repository";
 import { sourceAdapter, sourceAdapters } from "../sources";
 import { PermanentArticleError } from "../sources/adapter";
 
 export interface IngestSummary { sourceId: string; discovered: number; analyzed: number; rejected: number; skipped: number; errors: string[]; }
 
-export async function ingestSource(env: Env, sourceId: string, processLimit: number, discoveryPages = 1): Promise<IngestSummary> {
+export async function ingestSource(env: Env, sourceId: string, processLimit: number, discoveryPages = 1, recentOnly = false): Promise<IngestSummary> {
   const adapter = sourceAdapter(sourceId);
   let articles: DiscoveredArticle[];
   try {
@@ -35,7 +37,7 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
     throw error;
   }
   const summary: IngestSummary = { sourceId, discovered: articles.length, analyzed: 0, rejected: 0, skipped: 0, errors: [] };
-  if (adapter.supportsDeferredExtraction) {
+  if (adapter.supportsDeferredExtraction && !recentOnly) {
     const currentByUrl = new Map(articles.map((article) => [article.canonicalUrl, article]));
     const pending = await env.DB.prepare(`SELECT canonical_url,title,author,published_at FROM articles WHERE source_id=? AND status IN ('analysis_failed','discovered') ORDER BY CASE status WHEN 'analysis_failed' THEN 0 ELSE 1 END,datetime(updated_at) ASC LIMIT ?`)
       .bind(sourceId, Math.max(50, processLimit * 10)).all<{ canonical_url: string; title: string; author: string; published_at: string | null }>();
@@ -91,9 +93,12 @@ async function processArticle(env: Env, articleId: string, discovered: Discovere
   }
   const provider = aiProvider(env);
   const analysis = await provider.analyze(extracted, { articleId, analysisVersion: String(env.ANALYSIS_VERSION) });
-  if (!passesQualityGate(analysis)) {
+  analysis.contentEligibility = parseContentEligibility(analysis.contentEligibility, extracted.text) ?? invalidContentEligibility();
+  const eligibilityRejection = analysisContentRejectionReason(analysis) ?? legacyContentRejectionReason({ riskNotes: analysis.riskNotes, contextSummary: analysis.contextSummary, wordCount: extracted.wordCount });
+  if (eligibilityRejection || !passesQualityGate(analysis)) {
     await saveAnalysis(env.DB, analysis, now);
-    await markRejected(env.DB, articleId, "below_quality_gate", now);
+    await markRejected(env.DB, articleId, eligibilityRejection ?? "below_quality_gate", now);
+    if (eligibilityRejection) await env.DB.prepare("UPDATE articles SET content_review_reason=? WHERE id=?").bind(eligibilityRejection, articleId).run();
     await env.DB.prepare("UPDATE stored_objects SET expires_at=datetime(?,'+7 days') WHERE article_id=? AND kind='article_body' AND deleted_at IS NULL").bind(now, articleId).run();
     return;
   }
@@ -103,12 +108,22 @@ async function processArticle(env: Env, articleId: string, discovered: Discovere
 
 interface PreparedDailyChoice { runId: string; winner: RankedCandidate; whyWorthReading: string; whyToday: string; keywords: string[]; }
 
-export async function runDailySelection(env: Env, date: string, publishAt?: string): Promise<{ winnerArticleId: string; runId: string }> {
-  const existing = await env.DB.prepare("SELECT article_id FROM recommendations WHERE recommendation_date=? AND status='published'").bind(date).first<{ article_id: string }>();
-  if (existing) return { winnerArticleId: existing.article_id, runId: "existing" };
+export async function runDailySelection(env: Env, date: string, publishAt?: string): Promise<PublicationResult> {
+  assertAutomationEnabled(env);
+  const existing = await env.DB.prepare("SELECT article_id,selection_run_id,status FROM recommendations WHERE recommendation_date=?").bind(date).first<{ article_id: string; selection_run_id: string; status: "published" | "withdrawn" }>();
+  if (existing) return { winnerArticleId: existing.article_id, runId: existing.selection_run_id, status: existing.status };
   const prepared = await prepareDailyChoice(env, date, false);
-  await publishRecommendation({ db: env.DB, date, runId: prepared.runId, winner: prepared.winner, whyWorthReading: prepared.whyWorthReading, whyToday: prepared.whyToday, keywords: prepared.keywords, now: new Date().toISOString(), publishAt });
-  return { winnerArticleId: prepared.winner.articleId, runId: prepared.runId };
+  try {
+    assertAutomationEnabled(env);
+    return await publishRecommendation({ db: env.DB, date, runId: prepared.runId, winner: prepared.winner, whyWorthReading: prepared.whyWorthReading, whyToday: prepared.whyToday, keywords: prepared.keywords, now: new Date().toISOString(), publishAt });
+  } catch (error) {
+    await failSelectionRun(env.DB, prepared.runId, error instanceof Error ? error.message : String(error), new Date().toISOString());
+    throw error;
+  }
+}
+
+function assertAutomationEnabled(env: Env): void {
+  if (String(env.AUTOMATION_ENABLED) !== "true") throw new Error("Public automation is disabled");
 }
 
 export async function runDailySimulation(env: Env, date: string): Promise<{ status: "skipped" | "existing" | "completed"; readyCount: number; winnerArticleId?: string; runId?: string; consecutiveDays?: number }> {
@@ -132,7 +147,7 @@ async function prepareDailyChoice(env: Env, date: string, simulation: boolean): 
     const historyProjections = await projectionMap(env.DB, history.map((item) => item.articleId), String(env.EMBEDDING_VERSION));
     const recentVectors = history.slice(0, 7).flatMap((item) => { const vector = historyProjections.get(item.articleId); return vector ? [vector] : []; });
     const now = new Date(`${date}T06:00:00+08:00`);
-    const ranked = diverseTop(stableRank(rows.map((row) => rankCandidate({
+    const ranked = diverseTop(stableRank(rows.filter((row) => passesQualityGate(rowToAnalysis(row))).map((row) => rankCandidate({
       articleId: row.id,
       title: row.title,
       author: row.author,
@@ -167,6 +182,7 @@ async function prepareDailyChoice(env: Env, date: string, simulation: boolean): 
       console.error(JSON.stringify({ event: "copywriting_fallback", simulation, message: error instanceof Error ? error.message : String(error) }));
       copy = fallbackRecommendationCopy(winner);
     }
+    assertPublicRecommendationCopy(copy);
     return { runId, winner, whyWorthReading: copy.whyWorthReading, whyToday: copy.whyToday, keywords: copy.keywords };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

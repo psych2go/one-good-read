@@ -1,9 +1,11 @@
 import type { ArticleAnalysis, DiscoveredArticle, ExtractedArticle, FeedbackKind, RankedCandidate, RecommendationHistoryItem } from "../domain/types";
+import { analysisContentRejectionReason, invalidContentEligibility, legacyContentRejectionReason, parseContentEligibility } from "../domain/content-gate";
 import { retryDecision } from "../domain/retry";
 import { consecutiveDateStreak } from "../domain/simulation";
 import { normalizeArticleUrl } from "../domain/url";
 
 export interface ReadyArticleRow {
+  content_eligibility: string | null;
   id: string;
   source_id: string;
   canonical_url: string;
@@ -92,22 +94,25 @@ export async function saveExtracted(env: Env, articleId: string, article: Extrac
 }
 
 export async function saveAnalysis(db: D1Database, analysis: ArticleAnalysis, now: string): Promise<void> {
+  const eligibility = parseContentEligibility(analysis.contentEligibility) ?? invalidContentEligibility();
   await db.prepare(`
     INSERT INTO analyses (
       id, article_id, analysis_version, provider, model, intrinsic_score,
       long_term_value, idea_density, argument_quality, originality, clarity_structure,
       extraction_confidence, analysis_confidence, primary_theme, secondary_themes,
-      keywords, evidence, risk_notes, context_summary, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      keywords, evidence, risk_notes, context_summary, created_at, content_eligibility
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(article_id, analysis_version) DO NOTHING
   `).bind(
     crypto.randomUUID(), analysis.articleId, analysis.analysisVersion, analysis.provider, analysis.model, analysis.intrinsicScore,
     analysis.scores.longTermValue, analysis.scores.ideaDensity, analysis.scores.argumentQuality, analysis.scores.originality,
     analysis.scores.clarityStructure, analysis.extractionConfidence, analysis.analysisConfidence, analysis.primaryTheme,
     JSON.stringify(analysis.secondaryThemes), JSON.stringify(analysis.keywords), JSON.stringify(analysis.evidence),
-    JSON.stringify(analysis.riskNotes), analysis.contextSummary, now,
+    JSON.stringify(analysis.riskNotes), analysis.contextSummary, now, JSON.stringify(eligibility),
   ).run();
-  await db.prepare("UPDATE articles SET status='ready', updated_at=? WHERE id=?").bind(now, analysis.articleId).run();
+  const reason = analysisContentRejectionReason({ ...analysis, contentEligibility: eligibility });
+  await db.prepare("UPDATE articles SET status=?, content_review_reason=?, rejection_reason=?, updated_at=? WHERE id=? AND status NOT IN ('recommended','blocked','unavailable')")
+    .bind(reason ? "rejected" : "ready", reason ?? null, reason ?? null, now, analysis.articleId).run();
 }
 
 export async function readyCandidates(db: D1Database, analysisVersion: string, embeddingVersion: string, limit = 250, simulation = false): Promise<ReadyArticleRow[]> {
@@ -116,7 +121,7 @@ export async function readyCandidates(db: D1Database, analysisVersion: string, e
       n.analysis_version, n.provider, n.model, n.intrinsic_score, n.long_term_value, n.idea_density,
       n.argument_quality, n.originality, n.clarity_structure, n.extraction_confidence,
       n.analysis_confidence, n.primary_theme, n.secondary_themes, n.keywords, n.evidence,
-      n.risk_notes, n.context_summary
+      n.risk_notes, n.context_summary, n.content_eligibility
     FROM articles a
     JOIN analyses n ON n.article_id = a.id AND n.analysis_version = ?
     LEFT JOIN embeddings e ON e.article_id=a.id AND e.embedding_version=?
@@ -135,13 +140,33 @@ export async function readyCandidates(db: D1Database, analysisVersion: string, e
           )
       ))
     ORDER BY n.intrinsic_score DESC, a.id ASC
-    LIMIT ?
-  `).bind(analysisVersion, embeddingVersion, simulation ? 1 : 0, limit).all<ReadyArticleRow>();
-  return result.results;
+  `).bind(analysisVersion, embeddingVersion, simulation ? 1 : 0).all<ReadyArticleRow>();
+  // Screen the prepared pool before applying the candidate limit, so rejected top rows cannot starve it.
+  const eligible: ReadyArticleRow[] = [];
+  const reviews: D1PreparedStatement[] = [];
+  for (const row of result.results) {
+    const reason = candidateContentRejectionReason(row);
+    if (reason) reviews.push(db.prepare("UPDATE articles SET content_review_reason=? WHERE id=? AND status='ready'").bind(reason, row.id));
+    else eligible.push(row);
+  }
+  for (let offset = 0; offset < reviews.length; offset += 50) await db.batch(reviews.slice(offset, offset + 50));
+  return eligible.slice(0, limit);
+}
+
+export function candidateContentRejectionReason(row: Pick<ReadyArticleRow, "content_eligibility" | "risk_notes" | "context_summary" | "word_count">): string | undefined {
+  if (row.content_eligibility !== null) {
+    let value: unknown;
+    try { value = JSON.parse(row.content_eligibility); } catch { return "content_review:invalid_or_missing_eligibility"; }
+    const eligibility = parseContentEligibility(value);
+    if (!eligibility) return "content_review:invalid_or_missing_eligibility";
+    if (eligibility.format !== "standalone_essay") return `content_review:${eligibility.format}`;
+  }
+  return legacyContentRejectionReason({ riskNotes: JSON.parse(row.risk_notes) as string[], contextSummary: row.context_summary, wordCount: row.word_count });
 }
 
 export function rowToAnalysis(row: ReadyArticleRow): ArticleAnalysis {
   return {
+    contentEligibility: row.content_eligibility === null ? undefined : parseContentEligibility(JSON.parse(row.content_eligibility)),
     articleId: row.id,
     analysisVersion: row.analysis_version,
     provider: row.provider,
@@ -210,19 +235,33 @@ export async function publishRecommendation(input: {
   keywords: string[];
   now: string;
   publishAt?: string;
-}): Promise<void> {
+}): Promise<PublicationResult> {
   const recommendationId = crypto.randomUUID();
-  await input.db.batch([
+  // D1 batch is transactional. Only this INSERT's winner may mutate article/retention state.
+  const results = await input.db.batch([
     input.db.prepare(`
       INSERT INTO recommendations (id, recommendation_date, article_id, selection_run_id, why_worth_reading, why_today, public_keywords, published_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(recommendation_date) DO NOTHING
     `).bind(recommendationId, input.date, input.winner.articleId, input.runId, input.whyWorthReading, input.whyToday, JSON.stringify(input.keywords), input.publishAt ?? input.now),
-    input.db.prepare("UPDATE articles SET status='recommended', retry_eligible_at=NULL, updated_at=? WHERE id=?").bind(input.now, input.winner.articleId),
-    input.db.prepare("UPDATE stored_objects SET expires_at=datetime(?,'+90 days') WHERE article_id=? AND kind='article_body' AND deleted_at IS NULL").bind(input.publishAt ?? input.now, input.winner.articleId),
-    input.db.prepare("UPDATE selection_runs SET status='complete', winner_article_id=?, completed_at=? WHERE id=?").bind(input.winner.articleId, input.now, input.runId),
+    input.db.prepare("UPDATE articles SET status='recommended', retry_eligible_at=NULL, updated_at=? WHERE id=? AND EXISTS (SELECT 1 FROM recommendations WHERE id=?)")
+      .bind(input.now, input.winner.articleId, recommendationId),
+    input.db.prepare("UPDATE stored_objects SET expires_at=datetime(?,'+90 days') WHERE article_id=? AND kind='article_body' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM recommendations WHERE id=?)")
+      .bind(input.publishAt ?? input.now, input.winner.articleId, recommendationId),
+    input.db.prepare(`UPDATE selection_runs SET status='complete', winner_article_id=(SELECT article_id FROM recommendations WHERE recommendation_date=?), completed_at=?, failure_reason=NULL
+      WHERE id=? AND status='running' AND EXISTS (SELECT 1 FROM recommendations WHERE recommendation_date=? AND selection_run_id=? AND status='published')`)
+      .bind(input.date, input.now, input.runId, input.date, input.runId),
+    input.db.prepare(`UPDATE selection_runs SET status='degraded', winner_article_id=NULL, completed_at=?, failure_reason='publication_date_already_claimed'
+      WHERE id=? AND status='running' AND NOT EXISTS (SELECT 1 FROM recommendations WHERE recommendation_date=? AND selection_run_id=? AND status='published')`)
+      .bind(input.now, input.runId, input.date, input.runId),
+    input.db.prepare("SELECT article_id,selection_run_id,status FROM recommendations WHERE recommendation_date=?").bind(input.date),
   ]);
+  const actual = results[5]?.results[0] as { article_id: string; selection_run_id: string; status: "published" | "withdrawn" } | undefined;
+  if (!actual) throw new Error("Publication transaction did not return a recommendation");
+  return { winnerArticleId: actual.article_id, runId: actual.selection_run_id, status: actual.status };
 }
+
+export interface PublicationResult { winnerArticleId: string; runId: string; status: "published" | "withdrawn"; }
 
 export async function saveSimulationRecommendation(input: {
   db: D1Database;
