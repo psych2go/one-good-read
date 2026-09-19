@@ -19,7 +19,7 @@ The repository now includes source adapters for:
 - Aswath Damodaran
 - Benedict Evans
 
-Three sources — Nassim Nicholas Taleb, Ted Lamade (Collaborative Fund) and Farnam Street — were **paused on 2026-09-19** after data review: every analyzed article from them was rejected by the quality gate with high analysis confidence (content-bar mismatch, not a calibration bug). The adapters remain available if the bar or sources change.
+Ted Lamade (Collaborative Fund) was **paused on 2026-09-19** after data review: its full 33-article discovered corpus was rejected by the quality gate with high analysis confidence (max intrinsic 6.84 vs a 7.5 bar). Farnam Street and Nassim Nicholas Taleb were initially paused on the same review but **re-activated the same day**: their samples were partial (20/79 analyzed) or too small (6), so their backlogs are being analyzed to completion before any pause decision.
 
 Bloomberg Money Stuff remains deferred until a compliant, stable, free full-text discovery path is confirmed.
 
