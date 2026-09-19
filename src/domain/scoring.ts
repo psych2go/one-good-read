@@ -123,6 +123,25 @@ export function stableRank(candidates: RankedCandidate[]): RankedCandidate[] {
   return [...candidates].sort((a, b) => b.dynamicScore - a.dynamicScore || b.analysis.intrinsicScore - a.analysis.intrinsicScore || a.articleId.localeCompare(b.articleId));
 }
 
+/** Deterministic per-day ranking jitter. Purely deterministic ranking plus fatigue penalties locks the
+ * daily winner into a rigid weekly source cycle; a bounded (date, articleId)-seeded perturbation breaks
+ * near-ties differently each day while identical dates stay reproducible for idempotent re-runs. */
+export function dailyJitter(seed: string, span = 0.3): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return round(((hash >>> 0) / 0xffff_ffff) * 2 * span - span);
+}
+
+export function applyDailyJitter(candidates: RankedCandidate[], date: string, span = 0.3): RankedCandidate[] {
+  return candidates.map((candidate) => {
+    const jitter = dailyJitter(`${date}:${candidate.articleId}`, span);
+    return { ...candidate, dynamicScore: round(candidate.dynamicScore + jitter), explanation: `${candidate.explanation}；日扰动 ${jitter >= 0 ? "+" : ""}${jitter.toFixed(2)}` };
+  });
+}
+
 function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }

@@ -2,7 +2,9 @@ import type { RecommendationPageRow } from "../db/queries";
 import { formatPublicDate } from "../domain/date";
 import { Layout } from "./layout";
 
-function RecommendationCard({ item }: { item: RecommendationPageRow }) {
+const FEEDBACK_OPTIONS: Array<[string, string]> = [["valuable", "非常有价值"], ["good", "还不错"], ["not_for_me", "不适合我"], ["unfinished", "没读完"], ["later", "稍后再读"]];
+
+function RecommendationCard({ item, feedback, recorded }: { item: RecommendationPageRow; feedback?: string | null; recorded?: boolean }) {
   const date = formatPublicDate(item.recommendation_date);
   const keywords = JSON.parse(item.public_keywords) as string[];
   const originalDate = item.published_at_original ? new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(item.published_at_original)) : null;
@@ -18,19 +20,27 @@ function RecommendationCard({ item }: { item: RecommendationPageRow }) {
       <div class="editor-note today"><h2>为什么今天推荐</h2><p>{item.why_today}</p></div>
       <div class="reading-meta"><span>{item.reading_minutes} 分钟</span>{keywords.map((keyword) => <span>{keyword}</span>)}</div>
       <a class="read-button" href={item.canonical_url} target="_blank" rel="noopener noreferrer">阅读原文 <span aria-hidden="true">↗</span></a>
+      <section class="feedback-box" aria-label="阅读反馈">
+        <p class="feedback-title">读过之后，这篇怎么样？</p>
+        <form class="feedback-actions" method="post" action={`/read/${item.recommendation_date}/feedback`}>
+          {FEEDBACK_OPTIONS.map(([value, label]) => <button type="submit" name="kind" value={value} class={feedback === value ? "selected" : undefined}>{label}</button>)}
+        </form>
+        <p class="feedback-note">匿名、可选，仅用于调整以后的选文偏好。</p>
+        {recorded ? <p class="feedback-recorded" role="status">已记录，谢谢。</p> : null}
+      </section>
     </div>
   </article>;
 }
 
-export function HomePage({ item, origin }: { item: RecommendationPageRow | null; origin: string }) {
+export function HomePage({ item, origin, feedback }: { item: RecommendationPageRow | null; origin: string; feedback?: string | null }) {
   if (!item) return <Layout title="One Good Read" description="每天，从精选博客中自动选出一篇值得认真阅读的文章。" canonical={origin}>
     <section class="empty-state"><p class="edition-label">ONE GOOD READ</p><h1>第一篇阅读正在准备中。</h1><p>候选池和生产自动化正在准备中。启用后，系统会在北京时间早上六点发布。</p></section>
   </Layout>;
-  return <Layout title={`${item.title} — One Good Read`} description={item.why_worth_reading} canonical={`${origin}/read/${item.recommendation_date}`}><RecommendationCard item={item} /></Layout>;
+  return <Layout title={`${item.title} — One Good Read`} description={item.why_worth_reading} canonical={`${origin}/read/${item.recommendation_date}`}><RecommendationCard item={item} feedback={feedback} /></Layout>;
 }
 
-export function ReadPage({ item, origin }: { item: RecommendationPageRow; origin: string }) {
-  return <Layout title={`${item.title} — One Good Read`} description={item.why_worth_reading} canonical={`${origin}/read/${item.recommendation_date}`}><RecommendationCard item={item} /></Layout>;
+export function ReadPage({ item, origin, feedback, recorded }: { item: RecommendationPageRow; origin: string; feedback?: string | null; recorded?: boolean }) {
+  return <Layout title={`${item.title} — One Good Read`} description={item.why_worth_reading} canonical={`${origin}/read/${item.recommendation_date}`}><RecommendationCard item={item} feedback={feedback} recorded={recorded} /></Layout>;
 }
 
 export function ArchivePage(props: { rows: RecommendationPageRow[]; facets: { authors: string[]; themes: string[]; years: string[] }; page: number; hasNext: boolean; filters: { author?: string; theme?: string; year?: string }; origin: string }) {

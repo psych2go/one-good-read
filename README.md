@@ -19,6 +19,8 @@ The repository now includes source adapters for:
 - Aswath Damodaran
 - Benedict Evans
 
+Three sources — Nassim Nicholas Taleb, Ted Lamade (Collaborative Fund) and Farnam Street — were **paused on 2026-09-19** after data review: every analyzed article from them was rejected by the quality gate with high analysis confidence (content-bar mismatch, not a calibration bug). The adapters remain available if the bar or sources change.
+
 Bloomberg Money Stuff remains deferred until a compliant, stable, free full-text discovery path is confirmed.
 
 The development heuristic analyzer runs without paid credentials but now marks standalone eligibility uncertain; use the local SQL test fixtures to exercise offline publication. It is not a substitute for verified body analysis. Production can use OpenAI or an OpenAI-compatible relay. Set `AI_PROVIDER=openai-compatible`, configure the exact API prefix in `AI_BASE_URL`, and store `AI_API_KEY` as a Wrangler secret.
@@ -71,7 +73,7 @@ The cron expression `30 16 * * *` runs at 00:30 Asia/Shanghai. The new scheduler
 
 ## Retry, retention, and operations
 
-An hourly Reservoir coordinator safely grows the private candidate pool toward 300 articles; once reached, a seven-day private simulation automatically exercises the real selection path without publishing using four locked source batches per run. “Later” schedules the article after a 14-day cooldown and may be consumed by at most two distinct recommendation exposures. Recommendation bodies expire 90 days after publication. An hourly minute-45 monitor checks Reservoir progress and clears expired locks. The 06:30 Asia/Shanghai cron launches a durable health check through the existing Backfill Workflow independently of replenishment. Public `/health` reports publication, heartbeat, cleanup and tracked-storage health; `/health/live` is D1 liveness only. Alerts persist before optional delivery, support acknowledgement and condition-scoped recovery, and reject stale concurrent check results. Admin exposes health, check timestamps and incident history. Email remains disabled and unconfigured. This monitoring slice was deployed and manually bootstrapped on 2026-09-08 after 177 passing tests; see [monitoring rollout evidence and limits](docs/monitoring-slice.md).
+An hourly Reservoir coordinator safely grows the private candidate pool toward 300 articles; once reached, a seven-day private simulation automatically exercises the real selection path without publishing using four locked source batches per run. “Later” schedules the article after a 14-day cooldown and may be consumed by at most two distinct recommendation exposures. Recommendation bodies expire 90 days after publication. An hourly minute-45 monitor checks Reservoir progress and clears expired locks. The 06:30 Asia/Shanghai cron launches a durable health check through the existing Backfill Workflow independently of replenishment. Public `/health` reports publication, heartbeat, cleanup, tracked-storage health and an open-alert count summary; `/health/live` is D1 liveness only. Alerts persist before optional delivery, support acknowledgement and condition-scoped recovery, and reject stale concurrent check results. Alert delivery supports email and an `ALERT_WEBHOOK_URL` JSON webhook, both gated by `ALERTS_ENABLED`. Degraded selection runs (AI editor/copywriter fallback), 24h windowed analysis-failure rates, 48h analysis stalls with pending work, and per-source backfill failures all raise durable alerts independent of the reservoir target; `analysis_failed` articles stop retrying after three attempts. Daily ranking includes a date-seeded bounded jitter so scoring cannot lock into a rigid weekly source cycle. Admin exposes health, check timestamps and incident history. Email remains disabled and unconfigured. This monitoring slice was deployed and manually bootstrapped on 2026-09-08 after 177 passing tests; see [monitoring rollout evidence and limits](docs/monitoring-slice.md), including the 2026-09-19 blind-spot remediation.
 
 ## Semantic preference learning
 
@@ -80,6 +82,7 @@ Full vectors are stored privately in R2 and Vectorize. Daily ranking uses compac
 ## Data policy
 
 - No public visitor accounts, cookies, or behavioral analytics.
+- Public feedback is anonymous, optional, and used only to adjust future selection preferences.
 - Full article text is private and never served publicly.
 - Raw HTML is not retained.
 - Recommendation means “worth reading,” not endorsement.

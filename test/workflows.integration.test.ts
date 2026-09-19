@@ -75,9 +75,11 @@ describe("independent daily replenishment and publication", () => {
     Object.assign(env, { DAILY_WORKFLOW: daily, BACKFILL_WORKFLOW: refresh });
     const { ctx, pending } = context(); scheduleWorkflows(controller(), env, ctx);
     const results = await Promise.allSettled(pending);
-    expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
     expect(await publication).toMatchObject({ selection: { status: "published" } });
-    expect(refresh.createBatch).toHaveBeenCalledWith([expect.objectContaining({ id: "refresh-2026-09-08", params: { scheduledRefresh: true, limit: 5, pages: 1 } })]);
+    expect(refresh.createBatch).toHaveBeenCalledWith([expect.objectContaining({ id: "refresh-2026-09-08-farnam-street", params: { sourceId: "farnam-street", scheduledRefresh: true, limit: 5, pages: 1 } })]);
+    expect(refresh.createBatch).toHaveBeenCalledWith([expect.objectContaining({ id: "refresh-2026-09-08-paul-graham", params: { sourceId: "paul-graham", scheduledRefresh: true, limit: 5, pages: 1 } })]);
+    expect(refresh.createBatch).toHaveBeenCalledWith([expect.objectContaining({ id: "refresh-2026-09-08-embeddings", params: { embeddingsOnly: true, limit: 10 } })]);
   });
 
   it("daily workflow cannot publish when disabled, including after sleep/recovery", async () => {
@@ -121,6 +123,7 @@ describe("scheduler launch faults and safety", () => {
     const daily = workflowBinding(); const refresh = workflowBinding(); const simulation = workflowBinding();
     const env = Object.assign(testEnv(database.db), { AUTOMATION_ENABLED: "false", SIMULATION_ENABLED: "true", DAILY_WORKFLOW: daily, BACKFILL_WORKFLOW: refresh, SIMULATION_WORKFLOW: simulation }) as unknown as Env;
     const { ctx, pending } = context(); scheduleWorkflows(controller(), env, ctx); await Promise.all(pending);
-    expect(daily.createBatch).not.toHaveBeenCalled(); expect(simulation.createBatch).toHaveBeenCalledOnce(); expect(refresh.createBatch).toHaveBeenCalledOnce();
+    expect(daily.createBatch).not.toHaveBeenCalled(); expect(simulation.createBatch).toHaveBeenCalledOnce();
+    expect(vi.mocked(refresh.createBatch).mock.calls.flatMap((call) => (call[0] as Array<{ id: string }>).map((options) => options.id))).toEqual(["refresh-2026-09-08-farnam-street", "refresh-2026-09-08-marginal-revolution", "refresh-2026-09-08-paul-graham", "refresh-2026-09-08-embeddings"]);
   });
 });

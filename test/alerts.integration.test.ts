@@ -44,7 +44,7 @@ describe("0013 additive migration and incident SQL", () => {
     const env = Object.assign(testEnv(database.db), { ALERTS_ENABLED: "true", ALERT_TO_EMAIL: "to@example.test", ALERT_FROM_EMAIL: "from@example.test", EMAIL: { send } });
     await sendOperationalAlert(env, input);
     const id = String(rows()[0]!.id);
-    expect(rows()[0]).toMatchObject({ delivery_status: "failed", delivery_error: "provider unavailable" });
+    expect(rows()[0]).toMatchObject({ delivery_status: "failed", delivery_error: "email: provider unavailable" });
     expect(await acknowledgeAlert(env, id)).toBe("acknowledged");
     const acknowledgedAt = rows()[0]!.acknowledged_at;
     await sendOperationalAlert(env, input);
@@ -105,5 +105,39 @@ describe("0013 additive migration and incident SQL", () => {
     expect(rows()[1]).toMatchObject({ delivery_status: "failed", delivery_error: "Email configuration incomplete" });
     Object.assign(env, { ALERT_TO_EMAIL: "to@example.test", ALERT_FROM_EMAIL: "from@example.test", EMAIL: { send: vi.fn() } });
     expect(alertDeliveryReadiness(env)).toBe("ready");
+  });
+});
+
+describe("webhook delivery and public summary", () => {
+  it("delivers via webhook when configured and records per-channel failures", async () => {
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      requests.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+      return new Response(null, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = Object.assign(testEnv(database.db), { ALERTS_ENABLED: "true", ALERT_WEBHOOK_URL: "https://example.test/hook", ALERT_TO_EMAIL: "to@example.test", ALERT_FROM_EMAIL: "from@example.test", EMAIL: { send: vi.fn(async () => { throw new Error("provider unavailable"); }) } });
+    await sendOperationalAlert(env, { ...input, healthCheckId: undefined });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe("https://example.test/hook");
+    expect(requests[0]!.body).toMatchObject({ source: "one-good-read", type: input.type, subject: input.subject });
+    expect(rows()[0]).toMatchObject({ delivery_status: "sent", delivery_error: null });
+    vi.unstubAllGlobals();
+  });
+  it("stays disabled until ALERTS_ENABLED is true even with a webhook url", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const env = Object.assign(testEnv(database.db), { ALERTS_ENABLED: "false", ALERT_WEBHOOK_URL: "https://example.test/hook" });
+    await sendOperationalAlert(env, { ...input, healthCheckId: undefined });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(rows()[0]).toMatchObject({ delivery_status: "disabled" });
+    vi.unstubAllGlobals();
+  });
+  it("summarizes open incidents without leaking message text", async () => {
+    const { openAlertSummary } = await import("../src/operations/alerts");
+    const summary = JSON.stringify(await openAlertSummary(database.db));
+    expect(summary).not.toContain("Private details");
+    database.sqlite.prepare("INSERT INTO alerts (id,dedupe_key,alert_type,severity,subject,message,delivery_status,lifecycle_status,created_at) VALUES ('c','critical-key','analysis_stalled','critical','s','m','disabled','open','2026-09-19 00:00:00')").run();
+    expect(await openAlertSummary(database.db)).toMatchObject({ open: 1, critical: 1 });
   });
 });

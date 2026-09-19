@@ -6,16 +6,26 @@ import { backfillMissingEmbeddings, createAndStoreEmbedding, projectionMap } fro
 import { getOrTrainPreferenceModel, loadActivePreferenceModel, predictPersonalFit } from "../preferences/model";
 import { semanticSignals } from "../preferences/semantic";
 import { sendOperationalAlert } from "../operations/alerts";
+import { consecutiveDateStreak } from "../domain/simulation";
 import { analysisContentRejectionReason, contentRejectionReason, legacyContentRejectionReason, invalidContentEligibility, parseContentEligibility } from "../domain/content-gate";
 import { normalizeArticleUrl } from "../domain/url";
-import { diverseTop, passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
+import { applyDailyJitter, diverseTop, passesQualityGate, rankCandidate, stableRank } from "../domain/scoring";
 import type { DiscoveredArticle, RankedCandidate } from "../domain/types";
 import type { PublicationResult } from "../db/repository";
-import { annotateSelectionRun, createSelectionRun, DuplicateContentError, failSelectionRun, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, saveSimulationRecommendation, upsertDiscovered, markRejected } from "../db/repository";
+import { annotateSelectionRun, createSelectionRun, DuplicateContentError, failSelectionRun, markSelectionRunDegraded, publishRecommendation, readyCandidates, recommendationHistory, rowToAnalysis, saveAnalysis, saveCandidateSnapshot, saveExtracted, saveSimulationRecommendation, upsertDiscovered, markRejected } from "../db/repository";
 import { sourceAdapter, sourceAdapters } from "../sources";
 import { PermanentArticleError } from "../sources/adapter";
 
 export interface IngestSummary { sourceId: string; discovered: number; analyzed: number; rejected: number; skipped: number; errors: string[]; }
+
+/** analysis_failed articles stop being reprocessed after this many attempts so a dead AI dependency
+ * cannot burn quota on the same failing articles forever. Discovered articles are never capped. */
+export const ANALYSIS_RETRY_LIMIT = 3;
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name || "unknown_error";
+  return String(error) || "unknown_error";
+}
 
 export async function ingestSource(env: Env, sourceId: string, processLimit: number, discoveryPages = 1, recentOnly = false): Promise<IngestSummary> {
   const adapter = sourceAdapter(sourceId);
@@ -29,7 +39,7 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
     }
     articles = [...unique.values()];
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     console.error(JSON.stringify({ event: "source_discovery_failed", sourceId, message }));
     await env.DB.prepare("UPDATE sources SET consecutive_failures=consecutive_failures+1, updated_at=? WHERE id=?").bind(new Date().toISOString(), sourceId).run();
     const source = await env.DB.prepare("SELECT consecutive_failures,name FROM sources WHERE id=?").bind(sourceId).first<{ consecutive_failures: number; name: string }>();
@@ -39,8 +49,8 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
   const summary: IngestSummary = { sourceId, discovered: articles.length, analyzed: 0, rejected: 0, skipped: 0, errors: [] };
   if (adapter.supportsDeferredExtraction && !recentOnly) {
     const currentByUrl = new Map(articles.map((article) => [article.canonicalUrl, article]));
-    const pending = await env.DB.prepare(`SELECT canonical_url,title,author,published_at FROM articles WHERE source_id=? AND status IN ('analysis_failed','discovered') ORDER BY CASE status WHEN 'analysis_failed' THEN 0 ELSE 1 END,datetime(updated_at) ASC LIMIT ?`)
-      .bind(sourceId, Math.max(50, processLimit * 10)).all<{ canonical_url: string; title: string; author: string; published_at: string | null }>();
+    const pending = await env.DB.prepare(`SELECT canonical_url,title,author,published_at FROM articles WHERE source_id=? AND status IN ('analysis_failed','discovered') AND NOT (status='analysis_failed' AND retry_count>=?) ORDER BY CASE status WHEN 'analysis_failed' THEN 0 ELSE 1 END,datetime(updated_at) ASC LIMIT ?`)
+      .bind(sourceId, ANALYSIS_RETRY_LIMIT, Math.max(50, processLimit * 10)).all<{ canonical_url: string; title: string; author: string; published_at: string | null }>();
     const prioritized: DiscoveredArticle[] = pending.results.map((row) => currentByUrl.get(row.canonical_url) ?? { sourceId: adapter.sourceId, canonicalUrl: row.canonical_url, title: row.title, author: row.author, publishedAt: row.published_at ?? undefined });
     const prioritizedUrls = new Set(prioritized.map((article) => article.canonicalUrl));
     articles = [...prioritized, ...articles.filter((article) => !prioritizedUrls.has(article.canonicalUrl))];
@@ -49,16 +59,17 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
   let processed = 0;
   for (const article of articles) {
     const id = await upsertDiscovered(env.DB, article, now);
-    const state = await env.DB.prepare("SELECT status,rejection_reason FROM articles WHERE id=?").bind(id).first<{ status: string; rejection_reason: string | null }>();
+    const state = await env.DB.prepare("SELECT status,rejection_reason,retry_count FROM articles WHERE id=?").bind(id).first<{ status: string; rejection_reason: string | null; retry_count: number }>();
     const retryableRejection = state?.status === "rejected" && state.rejection_reason === "empty_body";
-    if (state?.status && !["discovered", "analysis_failed"].includes(state.status) && !retryableRejection) { summary.skipped += 1; continue; }
+    const processable = state?.status === "discovered" || (state?.status === "analysis_failed" && state.retry_count < ANALYSIS_RETRY_LIMIT);
+    if (state?.status && !processable && !retryableRejection) { summary.skipped += 1; continue; }
     if (processed >= processLimit) { summary.skipped += 1; continue; }
     processed += 1;
     try {
       await processArticle(env, id, article);
       summary.analyzed += 1;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       if (error instanceof PermanentArticleError) {
         summary.rejected += 1;
         await env.DB.prepare("UPDATE articles SET status='unavailable', access_state='unavailable', rejection_reason=?, updated_at=? WHERE id=?")
@@ -106,7 +117,7 @@ async function processArticle(env: Env, articleId: string, discovered: Discovere
   await createAndStoreEmbedding(env, { articleId, title: extracted.title, author: extracted.author, primaryTheme: analysis.primaryTheme, text: extracted.text });
 }
 
-interface PreparedDailyChoice { runId: string; winner: RankedCandidate; whyWorthReading: string; whyToday: string; keywords: string[]; }
+interface PreparedDailyChoice { runId: string; winner: RankedCandidate; whyWorthReading: string; whyToday: string; keywords: string[]; degradations: string[]; }
 
 export async function runDailySelection(env: Env, date: string, publishAt?: string): Promise<PublicationResult> {
   assertAutomationEnabled(env);
@@ -115,9 +126,11 @@ export async function runDailySelection(env: Env, date: string, publishAt?: stri
   const prepared = await prepareDailyChoice(env, date, false);
   try {
     assertAutomationEnabled(env);
-    return await publishRecommendation({ db: env.DB, date, runId: prepared.runId, winner: prepared.winner, whyWorthReading: prepared.whyWorthReading, whyToday: prepared.whyToday, keywords: prepared.keywords, now: new Date().toISOString(), publishAt });
+    const result = await publishRecommendation({ db: env.DB, date, runId: prepared.runId, winner: prepared.winner, whyWorthReading: prepared.whyWorthReading, whyToday: prepared.whyToday, keywords: prepared.keywords, now: new Date().toISOString(), publishAt });
+    await recordSelectionDegradation(env, date, false, prepared);
+    return result;
   } catch (error) {
-    await failSelectionRun(env.DB, prepared.runId, error instanceof Error ? error.message : String(error), new Date().toISOString());
+    await failSelectionRun(env.DB, prepared.runId, errorMessage(error), new Date().toISOString());
     throw error;
   }
 }
@@ -134,6 +147,7 @@ export async function runDailySimulation(env: Env, date: string): Promise<{ stat
   if (count < target) return { status: "skipped", readyCount: count };
   const prepared = await prepareDailyChoice(env, date, true);
   const simulation = await saveSimulationRecommendation({ db: env.DB, date, runId: prepared.runId, winner: prepared.winner, whyWorthReading: prepared.whyWorthReading, whyToday: prepared.whyToday, keywords: prepared.keywords, now: new Date().toISOString(), requiredDays: Number(env.SIMULATION_DAYS_REQUIRED) });
+  await recordSelectionDegradation(env, date, true, prepared);
   if (simulation.ready) await sendOperationalAlert(env, { dedupeKey: "simulation-ready", type: "simulation_ready", severity: "warning", subject: "7天不公开模拟已完成", message: `模拟已连续完成 ${simulation.consecutiveDays} 天，共 ${simulation.totalDays} 天。可以开始上线前完成审计。` });
   return { status: "completed", readyCount: count, winnerArticleId: prepared.winner.articleId, runId: prepared.runId, consecutiveDays: simulation.consecutiveDays };
 }
@@ -147,7 +161,7 @@ async function prepareDailyChoice(env: Env, date: string, simulation: boolean): 
     const historyProjections = await projectionMap(env.DB, history.map((item) => item.articleId), String(env.EMBEDDING_VERSION));
     const recentVectors = history.slice(0, 7).flatMap((item) => { const vector = historyProjections.get(item.articleId); return vector ? [vector] : []; });
     const now = new Date(`${date}T06:00:00+08:00`);
-    const ranked = diverseTop(stableRank(rows.filter((row) => passesQualityGate(rowToAnalysis(row))).map((row) => rankCandidate({
+    const ranked = diverseTop(applyDailyJitter(stableRank(rows.filter((row) => passesQualityGate(rowToAnalysis(row))).map((row) => rankCandidate({
       articleId: row.id,
       title: row.title,
       author: row.author,
@@ -159,7 +173,7 @@ async function prepareDailyChoice(env: Env, date: string, simulation: boolean): 
       now,
       personalFit: predictPersonalFit(preferenceModel, { author: row.author, wordCount: row.word_count, analysis: rowToAnalysis(row), projection: row.projection ? JSON.parse(row.projection) as number[] : undefined }),
       ...semanticForRow(row.projection, recentVectors),
-    })).filter((candidate) => candidate.authorPenalty < 100)), 10);
+    })).filter((candidate) => candidate.authorPenalty < 100)), date), 10);
     if (!ranked.length) throw new Error("No eligible candidates passed the quality and diversity gates");
     await saveCandidateSnapshot(env.DB, runId, ranked);
     const verified = await firstReachable(ranked);
@@ -169,27 +183,57 @@ async function prepareDailyChoice(env: Env, date: string, simulation: boolean): 
     const initialWinner = verified[0];
     if (!initialWinner) throw new Error("No reachable candidate remained");
     let winner = initialWinner;
+    const degradations: string[] = [];
     try {
       const decision = await provider.choose(verified, recentSummary);
       winner = verified.find((candidate) => candidate.articleId === decision.articleId) ?? winner;
     } catch (error) {
-      console.error(JSON.stringify({ event: "editor_choice_fallback", simulation, message: error instanceof Error ? error.message : String(error) }));
+      degradations.push("editor_choice_fallback");
+      console.error(JSON.stringify({ event: "editor_choice_fallback", simulation, message: errorMessage(error) }));
     }
     let copy: PublicRecommendationCopy;
     try {
       copy = await provider.writeRecommendation(winner, recentSummary);
     } catch (error) {
-      console.error(JSON.stringify({ event: "copywriting_fallback", simulation, message: error instanceof Error ? error.message : String(error) }));
+      degradations.push("copywriting_fallback");
+      console.error(JSON.stringify({ event: "copywriting_fallback", simulation, message: errorMessage(error) }));
       copy = fallbackRecommendationCopy(winner);
     }
     assertPublicRecommendationCopy(copy);
-    return { runId, winner, whyWorthReading: copy.whyWorthReading, whyToday: copy.whyToday, keywords: copy.keywords };
+    return { runId, winner, whyWorthReading: copy.whyWorthReading, whyToday: copy.whyToday, keywords: copy.keywords, degradations };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     await failSelectionRun(env.DB, runId, message, new Date().toISOString());
     await sendOperationalAlert(env, { dedupeKey: `${simulation ? "simulation" : "selection"}-failed:${date}`, type: simulation ? "simulation_failed" : "selection_failed", severity: "critical", subject: `${date} ${simulation ? "模拟" : "自动"}选文失败`, message });
     throw error;
   }
+}
+
+/** Fallback publication is operationally silent unless it is surfaced durably: mark the run degraded and
+ * alert, escalating to critical once the AI editor/copywriter has been down for consecutive days. */
+async function recordSelectionDegradation(env: Env, date: string, simulation: boolean, prepared: PreparedDailyChoice): Promise<void> {
+  if (!prepared.degradations.length) return;
+  const now = new Date().toISOString();
+  try {
+    await markSelectionRunDegraded(env.DB, prepared.runId, prepared.degradations, now);
+    const streak = await degradedStreakBefore(env.DB, date);
+    await sendOperationalAlert(env, {
+      dedupeKey: `${simulation ? "simulation" : "selection"}-degraded:${date}`,
+      type: "selection_degraded",
+      severity: streak >= 1 ? "critical" : "warning",
+      subject: `${date} ${simulation ? "模拟" : "自动"}选文降级（连续 ${streak + 1} 天）`,
+      message: `${prepared.degradations.join("、")}已启用兑底完成发布。连续 ${streak + 1} 天降级，请检查 AI 中转站可用性。`,
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ event: "degradation_record_failed", date, message: errorMessage(error) }));
+  }
+}
+
+async function degradedStreakBefore(db: D1Database, date: string): Promise<number> {
+  const rows = await db.prepare("SELECT DISTINCT recommendation_date date FROM selection_runs WHERE status='degraded' AND recommendation_date<? ORDER BY recommendation_date DESC LIMIT 30").all<{ date: string }>();
+  const dates = (rows?.results ?? []).map((row) => row.date).sort().reverse();
+  const yesterday = new Date(new Date(`${date}T00:00:00Z`).getTime() - 86_400_000).toISOString().slice(0, 10);
+  return dates[0] === yesterday ? consecutiveDateStreak(dates) : 0;
 }
 
 async function readyCount(db: D1Database): Promise<number> { const row = await db.prepare("SELECT count(*) count FROM articles WHERE status='ready'").first<{ count: number }>(); return row?.count ?? 0; }

@@ -34,7 +34,8 @@ describe("prepared-pool publication faults (real SQL)", () => {
     const result = await runDailySelection(testEnv(db), "2026-09-08", "2026-09-07T22:00:00Z");
     expect(result.winnerArticleId).toBe(winner.articleId);
     expect(result.status).toBe("published");
-    expect(await db.prepare("SELECT status FROM selection_runs WHERE id=?").bind(result.runId).first("status")).toBe("complete");
+    expect(await db.prepare("SELECT status FROM selection_runs WHERE id=?").bind(result.runId).first("status")).toBe("degraded");
+    expect(await db.prepare("SELECT failure_reason FROM selection_runs WHERE id=?").bind(result.runId).first("failure_reason")).toContain("copywriting_fallback");
     expect(backfillMissingEmbeddings).not.toHaveBeenCalled(); expect(createAndStoreEmbedding).not.toHaveBeenCalled();
   });
 
@@ -49,7 +50,8 @@ describe("prepared-pool publication faults (real SQL)", () => {
     const copy = { whyWorthReading: row!.why_worth_reading, whyToday: row!.why_today, keywords: JSON.parse(row!.public_keywords) };
     expect(() => assertPublicRecommendationCopy(copy)).not.toThrow();
     expect(new Set(copy.keywords).size).toBe(copy.keywords.length);
-    expect(await db.prepare("SELECT status FROM selection_runs WHERE id=?").bind(result.runId).first("status")).toBe("complete");
+    expect(await db.prepare("SELECT status FROM selection_runs WHERE id=?").bind(result.runId).first("status")).toBe("degraded");
+    expect(await db.prepare("SELECT failure_reason FROM selection_runs WHERE id=?").bind(result.runId).first("failure_reason")).toContain("copywriting_fallback");
   });
 
   it.each([null, { whyWorthReading: "", whyToday: "bad", keywords: [] }, { whyWorthReading: "x".repeat(50), whyToday: "x".repeat(40), keywords: [1, 2, 3] }])("invalid copy fails safely instead of publishing: %j", async (copy) => {

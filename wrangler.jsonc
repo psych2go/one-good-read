@@ -29,6 +29,7 @@
     "ALERTS_ENABLED": "false",
     "ALERT_TO_EMAIL": "",
     "ALERT_FROM_EMAIL": "",
+    "ALERT_WEBHOOK_URL": "",
     "R2_STORAGE_LIMIT_BYTES": "10000000000",
     "AUTOMATION_ENABLED": "true",
     "BACKFILL_ENABLED": "true",

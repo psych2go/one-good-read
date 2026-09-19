@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { html } from "hono/html";
 import { addFeedback, addSimulationFeedback } from "./db/repository";
-import { archiveFacets, archiveRecommendations, latestRecommendation, recommendationByDate } from "./db/queries";
+import { archiveFacets, archiveRecommendations, latestFeedbackKind, latestRecommendation, recommendationByDate } from "./db/queries";
 import { shanghaiDate } from "./domain/date";
 import { contentReviewQueue } from "./db/content-review";
 import { scheduleWorkflows } from "./workflows/schedule";
@@ -16,7 +16,7 @@ import { getOrTrainPreferenceModel } from "./preferences/model";
 import { embeddingProvider } from "./embeddings";
 import { isAuthorizedAdmin } from "./security/access";
 import { businessHealth, readOperationalCheck } from "./operations/business-health";
-import { acknowledgeAlert, alertDeliveryReadiness, type AlertRow } from "./operations/alerts";
+import { acknowledgeAlert, alertDeliveryReadiness, openAlertSummary, type AlertRow } from "./operations/alerts";
 import { cleanupExpiredObjects, storageUsage } from "./operations/storage";
 import { DailyReadingWorkflow } from "./workflows/daily";
 import { ReservoirWorkflow } from "./workflows/reservoir";
@@ -27,12 +27,30 @@ export { BackfillWorkflow, DailyReadingWorkflow, ReservoirWorkflow, SimulationWo
 type AppBindings = { Bindings: Env };
 const app = new Hono<AppBindings>();
 
-app.get("/", async (c) => c.html(<HomePage item={await latestRecommendation(c.env.DB)} origin={String(c.env.APP_ORIGIN)} />));
+app.get("/", async (c) => {
+  const item = await latestRecommendation(c.env.DB);
+  const feedback = item ? await latestFeedbackKind(c.env.DB, item.id).catch(() => null) : null;
+  return c.html(<HomePage item={item} origin={String(c.env.APP_ORIGIN)} feedback={feedback} />);
+});
 app.get("/read/:date", async (c) => {
   const date = c.req.param("date");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.notFound();
   const item = await recommendationByDate(c.env.DB, date);
-  return item ? c.html(<ReadPage item={item} origin={String(c.env.APP_ORIGIN)} />) : c.notFound();
+  if (!item) return c.notFound();
+  const feedback = await latestFeedbackKind(c.env.DB, item.id).catch(() => null);
+  return c.html(<ReadPage item={item} origin={String(c.env.APP_ORIGIN)} feedback={feedback} recorded={c.req.query("recorded") === "1"} />);
+});
+app.post("/read/:date/feedback", async (c) => {
+  const date = c.req.param("date");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return c.notFound();
+  if (!sameOrigin(c.req.raw, String(c.env.APP_ORIGIN))) return c.text("Invalid origin", 403);
+  const body = await c.req.parseBody();
+  const kind = body.kind;
+  if (typeof kind !== "string" || !isFeedbackKind(kind)) return c.text("Invalid feedback", 400);
+  const recommendation = await c.env.DB.prepare("SELECT id FROM recommendations WHERE recommendation_date=? AND status='published'").bind(date).first<{ id: string }>();
+  if (!recommendation) return c.text("Unknown recommendation", 404);
+  await addFeedback(c.env.DB, recommendation.id, kind);
+  return c.redirect(`/read/${date}?recorded=1`, 303);
 });
 app.get("/archive", async (c) => {
   const page = Math.max(1, Number(c.req.query("page") ?? 1));
@@ -51,8 +69,8 @@ app.get("/health/live", async (c) => {
 });
 app.get("/health", async (c) => {
   c.header("Cache-Control", "no-store");
-  const health = await businessHealth(c.env);
-  return c.json(health, health.ok ? 200 : 503);
+  const [health, alerts] = await Promise.all([businessHealth(c.env), openAlertSummary(c.env.DB).catch(() => null)]);
+  return c.json(alerts ? { ...health, alerts } : health, health.ok ? 200 : 503);
 });
 app.get("/sitemap.xml", async (c) => {
   const rows = await c.env.DB.prepare("SELECT recommendation_date FROM recommendations WHERE status='published' AND datetime(published_at) <= datetime('now') ORDER BY recommendation_date DESC LIMIT 5000").all<{ recommendation_date: string }>();

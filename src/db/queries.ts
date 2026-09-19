@@ -32,6 +32,10 @@ export async function recommendationByDate(db: D1Database, date: string, now = n
   return db.prepare(`${BASE_SELECT} AND r.recommendation_date=? LIMIT 1`).bind(now, date).first<RecommendationPageRow>();
 }
 
+export async function latestFeedbackKind(db: D1Database, recommendationId: string): Promise<string | null> {
+  return db.prepare("SELECT kind FROM feedback WHERE recommendation_id=? ORDER BY datetime(created_at) DESC LIMIT 1").bind(recommendationId).first<string>("kind");
+}
+
 export async function archiveRecommendations(db: D1Database, input: { page: number; author?: string; theme?: string; year?: string }, now = new Date().toISOString()): Promise<{ rows: RecommendationPageRow[]; hasNext: boolean }> {
   const conditions: string[] = [];
   const bindings: unknown[] = [];

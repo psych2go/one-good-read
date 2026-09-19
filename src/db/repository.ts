@@ -291,6 +291,13 @@ export async function failSelectionRun(db: D1Database, runId: string, reason: st
   await db.prepare("UPDATE selection_runs SET status='failed', failure_reason=?, completed_at=? WHERE id=?").bind(reason, now, runId).run();
 }
 
+/** A run that still published through a fallback path is neither complete nor failed: mark it degraded
+ * with the exact fallback reasons so admin history and alerting can see the silent quality loss. */
+export async function markSelectionRunDegraded(db: D1Database, runId: string, reasons: string[], now: string): Promise<void> {
+  await db.prepare("UPDATE selection_runs SET status='degraded', failure_reason=coalesce(failure_reason,?), completed_at=coalesce(completed_at,?) WHERE id=? AND status IN ('running','complete')")
+    .bind(reasons.join(","), now, runId).run();
+}
+
 export async function addSimulationFeedback(db: D1Database, simulationDate: string, kind: FeedbackKind, now = new Date()): Promise<void> {
   const simulation = await db.prepare("SELECT article_id FROM simulation_recommendations WHERE simulation_date=?").bind(simulationDate).first<{ article_id: string }>();
   if (!simulation) throw new Error("Simulation recommendation not found");

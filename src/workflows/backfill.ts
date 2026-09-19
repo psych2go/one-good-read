@@ -1,8 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { adapterIds, backfillMissingEmbeddings, ingestSource } from "./pipeline";
+import { adapterIds, backfillMissingEmbeddings, ingestSource, errorMessage } from "./pipeline";
 import { assertStorageAllowsBackfill } from "../operations/storage";
 import { runOperationalHealthCheck } from "../operations/health";
 import { probeProductionAi } from "../operations/ai-probe";
+import { sendOperationalAlert } from "../operations/alerts";
 
 export interface BackfillWorkflowParams { healthCheck?: boolean; sourceId?: string; limit?: number; pages?: number; embeddingsOnly?: boolean; aiProbe?: boolean; managed?: boolean; scheduledRefresh?: boolean; }
 
@@ -33,8 +34,11 @@ export class BackfillWorkflow extends WorkflowEntrypoint<Env, BackfillWorkflowPa
           return ingestSource(this.env, sourceId, Math.min(event.payload.limit ?? 25, 50), Math.min(event.payload.pages ?? 1, 100), event.payload.scheduledRefresh);
         }));
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         console.error(JSON.stringify({ event: "backfill_source_failed", sourceId, message }));
+        // A source that fails after discovery looks identical to success in last_scanned_at and
+        // consecutive_failures; surface it as a durable daily alert instead of a swallowed log line.
+        await sendOperationalAlert(this.env, { dedupeKey: `backfill-source-failed:${sourceId}:${new Date().toISOString().slice(0, 10)}`, type: "backfill_source_failed", severity: "warning", subject: `${sourceId} 回填失败`, message: message.slice(0, 400) });
         results.push({ sourceId, error: message });
       } finally {
         if (event.payload.managed) await step.do(`unlock-${sourceId}`, async () => { await this.env.DB.prepare("UPDATE sources SET backfill_locked_until=NULL WHERE id=?").bind(sourceId).run(); return { unlocked: true }; });

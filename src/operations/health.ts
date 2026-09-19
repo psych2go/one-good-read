@@ -75,7 +75,19 @@ function timestampStatement(env: Env, key: string, timestamp: string, healthChec
 }
 function formatBytes(value: number): string { return `${(value / 1024 / 1024).toFixed(1)} MiB`; }
 
-interface BackfillMonitorState { ready: number; failed: number; checkedAt: string; lastProgressAt: string; }
+interface BackfillMonitorState { ready: number; failed: number; checkedAt: string; lastProgressAt: string; lastAnalysisAt?: string | null; }
+
+export interface AnalysisHealthWindow { failed24h: number; processed24h: number; analyses48h: number; pending: number; }
+export interface AnalysisHealthVerdict { failureRateAlert: boolean; stallAlert: boolean; }
+
+/** Recent-window analysis health. The all-time failure ratio dilutes sustained outages (a few days of
+ * 100% failures stay under a cumulative 10% threshold), and reservoir-target suppression hides a dead
+ * pipeline while the pool is above target — both blind spots from the 2026-09 AI outage. */
+export function evaluateAnalysisHealth(input: AnalysisHealthWindow): AnalysisHealthVerdict {
+  const failureRateAlert = input.processed24h >= 5 && input.failed24h / input.processed24h >= 0.5;
+  const stallAlert = input.analyses48h === 0 && (input.pending > 0 || input.failed24h > 0);
+  return { failureRateAlert, stallAlert };
+}
 
 export async function runBackfillHealthCheck(env: Env): Promise<BackfillMonitorState> {
   const now = new Date();
@@ -89,6 +101,21 @@ export async function runBackfillHealthCheck(env: Env): Promise<BackfillMonitorS
   ]);
   const previous = parseMonitor(previousRow?.value);
   const state = nextBackfillMonitorState(previous, counts?.ready ?? 0, counts?.failed ?? 0, now);
+  const [windowCounts, analysisWindow, pendingRow] = await Promise.all([
+    env.DB.prepare(`SELECT sum(CASE WHEN status='analysis_failed' THEN 1 ELSE 0 END) failed24h, sum(CASE WHEN status IN ('ready','rejected','analysis_failed') THEN 1 ELSE 0 END) processed24h FROM articles WHERE datetime(updated_at) >= datetime('now','-24 hours')`).first<{ failed24h: number | null; processed24h: number | null }>(),
+    env.DB.prepare("SELECT count(*) n, max(created_at) latest FROM analyses WHERE datetime(created_at) >= datetime('now','-48 hours')").first<{ n: number; latest: string | null }>(),
+    env.DB.prepare("SELECT count(*) n FROM articles WHERE status IN ('discovered','analysis_failed')").first<{ n: number }>(),
+  ]);
+  const analysisWindowInput: AnalysisHealthWindow = { failed24h: windowCounts?.failed24h ?? 0, processed24h: windowCounts?.processed24h ?? 0, analyses48h: analysisWindow?.n ?? 0, pending: pendingRow?.n ?? 0 };
+  const verdict = evaluateAnalysisHealth(analysisWindowInput);
+  const day = now.toISOString().slice(0, 10);
+  // Windowed checks are independent of the reservoir target: a full pool must not hide a dead analysis pipeline.
+  if (verdict.failureRateAlert) {
+    await sendOperationalAlert(env, { dedupeKey: `analysis-failure-window:${day}`, type: "analysis_failure_window", severity: "warning", subject: "近24小时文章分析失败率超过50%", message: `近24小时已处理 ${analysisWindowInput.processed24h} 篇，其中 ${analysisWindowInput.failed24h} 篇失败。请检查中转站 5xx/429 与结构化输出。` });
+  }
+  if (verdict.stallAlert) {
+    await sendOperationalAlert(env, { dedupeKey: `analysis-stalled:${day}`, type: "analysis_stalled", severity: "critical", subject: "分析管线近48小时零产出", message: `近48小时没有成功分析，但仍有 ${analysisWindowInput.pending} 篇待处理（discovered/analysis_failed）。候选池停止补充，请立即检查 AI 依赖。` });
+  }
   const target = Number(env.RESERVOIR_TARGET);
   if (state.ready < target) {
     const reservoirUpdatedAt = parseSqliteDate(reservoirRow?.updated_at);
@@ -104,7 +131,7 @@ export async function runBackfillHealthCheck(env: Env): Promise<BackfillMonitorS
     await sendOperationalAlert(env, { dedupeKey: `analysis-failure-rate:${now.toISOString().slice(0, 10)}`, type: "analysis_failure_rate", severity: "warning", subject: "文章分析失败率超过 10%", message: `已处理 ${processed} 篇，其中 ${state.failed} 篇 analysis_failed。请检查中转站 5xx、超时与结构化输出。` });
   }
   await env.DB.prepare("INSERT INTO system_state (key,value,updated_at) VALUES ('backfill_monitor',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP")
-    .bind(JSON.stringify(state)).run();
+    .bind(JSON.stringify({ ...state, lastAnalysisAt: analysisWindow?.latest ?? null })).run();
   return state;
 }
 

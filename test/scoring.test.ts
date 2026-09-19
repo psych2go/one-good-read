@@ -22,3 +22,26 @@ describe("Top candidate diversity", () => {
     expect(diverseTop(values, 4, 2).map((item) => item.articleId)).toEqual(["a1", "a2", "b1"]);
   });
 });
+
+describe("daily jitter", () => {
+  it("is deterministic for the same seed and bounded by the span", async () => {
+    const { dailyJitter } = await import("../src/domain/scoring");
+    expect(dailyJitter("2026-09-08:article-a")).toBe(dailyJitter("2026-09-08:article-a"));
+    expect(dailyJitter("2026-09-08:article-a")).not.toBe(dailyJitter("2026-09-09:article-a"));
+    for (let index = 0; index < 50; index += 1) {
+      const value = dailyJitter(`seed-${index}`);
+      expect(value).toBeGreaterThanOrEqual(-0.3);
+      expect(value).toBeLessThanOrEqual(0.3);
+    }
+  });
+  it("shifts dynamic scores by the seeded amount without mutating inputs", async () => {
+    const { applyDailyJitter } = await import("../src/domain/scoring");
+    const base = { title: "", author: "", canonicalUrl: "", readingMinutes: 1, analysis, dynamicScore: 8, freshnessBonus: 0, explorationBonus: 0, authorPenalty: 0, themePenalty: 0, connectionBonus: 0, personalFit: 0, explanation: "test" };
+    const candidates = [{ ...base, articleId: "a" }, { ...base, articleId: "b" }] as RankedCandidate[];
+    const jittered = applyDailyJitter(candidates, "2026-09-08");
+    const { dailyJitter } = await import("../src/domain/scoring");
+    expect(jittered[0]!.dynamicScore).toBe(Math.round((8 + dailyJitter("2026-09-08:a")) * 1000) / 1000);
+    expect(candidates[0]!.dynamicScore).toBe(8);
+    expect(jittered[0]!.explanation).toContain("日扰动");
+  });
+});

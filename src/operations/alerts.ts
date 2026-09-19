@@ -14,6 +14,21 @@ export function alertDeliveryReadiness(env: Env): DeliveryReadiness {
   return String(env.ALERT_TO_EMAIL ?? "").trim() && String(env.ALERT_FROM_EMAIL ?? "").trim() && isEmailBinding(Reflect.get(env, "EMAIL")) ? "ready" : "misconfigured";
 }
 
+export function webhookAlertTarget(env: Env): string | null {
+  if (String(env.ALERTS_ENABLED) !== "true") return null;
+  const url = String(env.ALERT_WEBHOOK_URL ?? "").trim();
+  return /^https?:\/\//.test(url) ? url : null;
+}
+
+export interface AlertSummary { open: number; critical: number; latestCriticalAt: string | null; }
+
+/** Public-facing counts only (never alert text) so /health can expose monitoring visibility
+ * without leaking operational details. */
+export async function openAlertSummary(db: D1Database): Promise<AlertSummary> {
+  const row = await db.prepare(`SELECT count(*) open, sum(CASE WHEN severity='critical' THEN 1 ELSE 0 END) critical, max(CASE WHEN severity='critical' THEN coalesce(last_seen_at,created_at) END) latest_critical_at FROM alerts WHERE lifecycle_status IN ('open','acknowledged')`).first<{ open: number; critical: number | null; latest_critical_at: string | null }>();
+  return { open: row?.open ?? 0, critical: row?.critical ?? 0, latestCriticalAt: row?.latest_critical_at ?? null };
+}
+
 export async function sendOperationalAlert(env: Env, input: { dedupeKey: string; type: string; severity: "warning" | "critical"; subject: string; message: string; managedCondition?: ManagedHealthCondition; healthCheckId?: string }): Promise<void> {
   // One atomic write claims the notification and increments repeats, including acknowledged incidents.
   // Persist BEFORE external I/O: interrupted delivery stays logged, never loses the incident.
@@ -30,16 +45,32 @@ export async function sendOperationalAlert(env: Env, input: { dedupeKey: string;
   if (!incident || incident.occurrence_count !== 1) return;
   let status: "sent" | "failed" | "disabled" = "disabled";
   let deliveryError: string | null = null;
-  const readiness = alertDeliveryReadiness(env);
-  const binding = Reflect.get(env, "EMAIL");
-  if (readiness === "misconfigured") { status = "failed"; deliveryError = "Email configuration incomplete"; }
-  else if (readiness === "ready" && isEmailBinding(binding)) {
-    try {
-      await binding.send({ to: String(env.ALERT_TO_EMAIL).trim(), from: { email: String(env.ALERT_FROM_EMAIL).trim(), name: "One Good Read" },
-        subject: `[One Good Read] ${input.subject}`, text: input.message,
-        html: `<h1>${escapeHtml(input.subject)}</h1><p>${escapeHtml(input.message).replace(/\n/g, "<br>")}</p>` });
-      status = "sent";
-    } catch (error) { status = "failed"; deliveryError = error instanceof Error ? error.message : String(error); }
+  if (String(env.ALERTS_ENABLED) === "true") {
+    const delivered: string[] = [];
+    const errors: string[] = [];
+    const readiness = alertDeliveryReadiness(env);
+    const binding = Reflect.get(env, "EMAIL");
+    if (readiness === "misconfigured") errors.push("Email configuration incomplete");
+    else if (readiness === "ready" && isEmailBinding(binding)) {
+      try {
+        await binding.send({ to: String(env.ALERT_TO_EMAIL).trim(), from: { email: String(env.ALERT_FROM_EMAIL).trim(), name: "One Good Read" },
+          subject: `[One Good Read] ${input.subject}`, text: input.message,
+          html: `<h1>${escapeHtml(input.subject)}</h1><p>${escapeHtml(input.message).replace(/\n/g, "<br>")}</p>` });
+        delivered.push("email");
+      } catch (error) { errors.push(`email: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    const webhook = webhookAlertTarget(env);
+    if (webhook) {
+      try {
+        const response = await fetch(webhook, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source: "one-good-read", type: input.type, severity: input.severity, subject: input.subject, message: input.message, dedupeKey: input.dedupeKey, createdAt: new Date().toISOString() }),
+          signal: AbortSignal.timeout(10_000) });
+        if (response.ok) delivered.push("webhook");
+        else errors.push(`webhook: HTTP ${response.status}`);
+      } catch (error) { errors.push(`webhook: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    status = delivered.length ? "sent" : "failed";
+    if (!delivered.length) deliveryError = errors.join("; ").slice(0, 500) || "No alert delivery channel succeeded";
   }
   await env.DB.prepare("UPDATE alerts SET delivery_status=?,delivery_error=? WHERE id=?").bind(status, deliveryError, incident.id).run();
 }
