@@ -102,7 +102,15 @@ export async function saveAnalysis(db: D1Database, analysis: ArticleAnalysis, no
       extraction_confidence, analysis_confidence, primary_theme, secondary_themes,
       keywords, evidence, risk_notes, context_summary, created_at, content_eligibility
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(article_id, analysis_version) DO NOTHING
+    ON CONFLICT(article_id, analysis_version) DO UPDATE SET
+      provider=excluded.provider, model=excluded.model, intrinsic_score=excluded.intrinsic_score,
+      long_term_value=excluded.long_term_value, idea_density=excluded.idea_density,
+      argument_quality=excluded.argument_quality, originality=excluded.originality,
+      clarity_structure=excluded.clarity_structure, extraction_confidence=excluded.extraction_confidence,
+      analysis_confidence=excluded.analysis_confidence, primary_theme=excluded.primary_theme,
+      secondary_themes=excluded.secondary_themes, keywords=excluded.keywords, evidence=excluded.evidence,
+      risk_notes=excluded.risk_notes, context_summary=excluded.context_summary, created_at=excluded.created_at,
+      content_eligibility=excluded.content_eligibility
   `).bind(
     crypto.randomUUID(), analysis.articleId, analysis.analysisVersion, analysis.provider, analysis.model, analysis.intrinsicScore,
     analysis.scores.longTermValue, analysis.scores.ideaDensity, analysis.scores.argumentQuality, analysis.scores.originality,

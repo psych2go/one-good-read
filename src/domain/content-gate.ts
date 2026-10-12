@@ -10,8 +10,20 @@ export function parseContentEligibility(value: unknown, body?: string): ContentE
   if (item.version !== ELIGIBILITY_VERSION || !CONTENT_FORMATS.includes(item.format as ContentEligibility["format"])) return undefined;
   if (typeof item.reason !== "string" || !item.reason.trim() || item.reason.length > 1000) return undefined;
   if (!Array.isArray(item.bodyEvidence) || item.bodyEvidence.length < 1 || item.bodyEvidence.length > 5) return undefined;
-  if (!item.bodyEvidence.every((quote): quote is string => typeof quote === "string" && !!quote.trim() && quote.length <= 1000 && (body === undefined || body.includes(quote)))) return undefined;
+  if (!item.bodyEvidence.every((quote): quote is string => typeof quote === "string" && !!quote.trim() && quote.length <= 1000 && (body === undefined || bodyContainsQuote(body, quote)))) return undefined;
   return { version: ELIGIBILITY_VERSION, format: item.format as ContentEligibility["format"], reason: item.reason, bodyEvidence: item.bodyEvidence };
+}
+
+function bodyContainsQuote(body: string, quote: string): boolean {
+  if (body.includes(quote)) return true;
+  const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+  const normalizedBody = normalize(body);
+  const normalizedQuote = normalize(quote);
+  if (!normalizedQuote) return false;
+  if (normalizedBody.includes(normalizedQuote)) return true;
+  // Workers AI sometimes truncates a sentence mid-clause; accept long prefix matches.
+  if (normalizedQuote.length >= 40 && normalizedBody.includes(normalizedQuote.slice(0, Math.min(80, normalizedQuote.length)))) return true;
+  return false;
 }
 
 export function invalidContentEligibility(): ContentEligibility {

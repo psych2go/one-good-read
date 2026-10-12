@@ -4,7 +4,7 @@ import { apiEndpoint } from "./base-url";
 import type { ArticleAnalysis, ExtractedArticle, PublicRecommendationCopy, RankedCandidate } from "../domain/types";
 import type { AiProvider, AiProbeResult, AnalysisContext } from "./provider";
 
-const THEMES = ["工作与创造","创业与商业","投资与资本配置","风险与不确定性","决策与判断","心理与行为","科技与产业","AI 与软件","经济与制度","社会与文化","学习与知识","人生与长期主义","估值与金融技术","科学与认识论"];
+export const THEMES = ["工作与创造","创业与商业","投资与资本配置","风险与不确定性","决策与判断","心理与行为","科技与产业","AI 与软件","经济与制度","社会与文化","学习与知识","人生与长期主义","估值与金融技术","科学与认识论"];
 
 export class OpenAiProvider implements AiProvider {
   readonly name = "openai";
@@ -134,7 +134,7 @@ export class OpenAiProvider implements AiProvider {
   }
 }
 
-const BLIND_SYSTEM_PROMPT = `你是严谨的文章编辑。只根据正文盲评，不根据作者声誉。分数使用0到10。必须阅读全文，区分长期价值、思想密度、论证质量、原创性、表达结构。
+export const BLIND_SYSTEM_PROMPT = `你是严谨的文章编辑。只根据正文盲评，不根据作者声誉。分数使用0到10。必须阅读全文，区分长期价值、思想密度、论证质量、原创性、表达结构。
 独立判断 contentEligibility，version 必须是 ${ELIGIBILITY_VERSION}。只看提供的正文，不推测链接目标内容。
 standalone_essay 必须在正文内独立展开观点、理由或观察。摘要/论文摘要选 abstract；大段引用后仅附作者归属、链接或简短引荐选 quotation_introduction；链接合集选 roundup；不完整/截断/付费预览选 preview；以音视频为主选 media；无法确定选 uncertain。
 高质量研究、知名作者、高分不能覆盖非独立文章资格。没有最低字数：短但自洽的随笔可以通过；含大量引用但有作者自身展开的论证的完整文章也可以通过。reason 说明正文依据，bodyEvidence 引用1至5个正文原句（每条不超过1000字符），不得虚构。`;
@@ -156,13 +156,13 @@ export function chunkForAnalysis(text: string, maxChars = 18_000, overlap = 500)
   return chunks;
 }
 
-function wait(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+export function wait(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 
-interface BlindResult { contentEligibility: unknown; longTermValue: number; ideaDensity: number; argumentQuality: number; originality: number; clarityStructure: number; confidence: number; evidence: string[]; riskNotes: string[]; }
-interface ContextResult { primaryTheme: string; secondaryThemes: string[]; keywords: string[]; confidence: number; contextSummary: string; }
+export interface BlindResult { contentEligibility: unknown; longTermValue: number; ideaDensity: number; argumentQuality: number; originality: number; clarityStructure: number; confidence: number; evidence: string[]; riskNotes: string[]; }
+export interface ContextResult { primaryTheme: string; secondaryThemes: string[]; keywords: string[]; confidence: number; contextSummary: string; }
 
-const score = { type: "number", minimum: 0, maximum: 10 };
-const eligibilitySchema = { type: "object", additionalProperties: false, required: ["version", "format", "reason", "bodyEvidence"], properties: { version: { type: "string", enum: [ELIGIBILITY_VERSION] }, format: { type: "string", enum: CONTENT_FORMATS }, reason: { type: "string", minLength: 1, maxLength: 1000 }, bodyEvidence: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", minLength: 1, maxLength: 1000 } } } };
-const blindSchema = { type: "object", additionalProperties: false, required: ["contentEligibility","longTermValue","ideaDensity","argumentQuality","originality","clarityStructure","confidence","evidence","riskNotes"], properties: { contentEligibility: eligibilitySchema, longTermValue: score, ideaDensity: score, argumentQuality: score, originality: score, clarityStructure: score, confidence: { type: "number", minimum: 0, maximum: 1 }, evidence: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } }, riskNotes: { type: "array", maxItems: 5, items: { type: "string" } } } };
-const contextSchema = { type: "object", additionalProperties: false, required: ["primaryTheme","secondaryThemes","keywords","confidence","contextSummary"], properties: { primaryTheme: { type: "string", enum: THEMES }, secondaryThemes: { type: "array", maxItems: 3, items: { type: "string", enum: THEMES } }, keywords: { type: "array", minItems: 3, maxItems: 5, items: { type: "string" } }, confidence: { type: "number", minimum: 0, maximum: 1 }, contextSummary: { type: "string" } } };
-function minimalCandidate(candidate: RankedCandidate) { return { articleId: candidate.articleId, title: candidate.title, author: candidate.author, publishedAt: candidate.publishedAt, readingMinutes: candidate.readingMinutes, intrinsicScore: candidate.analysis.intrinsicScore, scores: candidate.analysis.scores, primaryTheme: candidate.analysis.primaryTheme, secondaryThemes: candidate.analysis.secondaryThemes, evidence: candidate.analysis.evidence, riskNotes: candidate.analysis.riskNotes, dynamicScore: candidate.dynamicScore, scoreExplanation: candidate.explanation }; }
+export const score = { type: "number", minimum: 0, maximum: 10 };
+export const eligibilitySchema = { type: "object", additionalProperties: false, required: ["version", "format", "reason", "bodyEvidence"], properties: { version: { type: "string", enum: [ELIGIBILITY_VERSION] }, format: { type: "string", enum: CONTENT_FORMATS }, reason: { type: "string", minLength: 1, maxLength: 1000 }, bodyEvidence: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", minLength: 1, maxLength: 1000 } } } };
+export const blindSchema = { type: "object", additionalProperties: false, required: ["contentEligibility","longTermValue","ideaDensity","argumentQuality","originality","clarityStructure","confidence","evidence","riskNotes"], properties: { contentEligibility: eligibilitySchema, longTermValue: score, ideaDensity: score, argumentQuality: score, originality: score, clarityStructure: score, confidence: { type: "number", minimum: 0, maximum: 1 }, evidence: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } }, riskNotes: { type: "array", maxItems: 5, items: { type: "string" } } } };
+export const contextSchema = { type: "object", additionalProperties: false, required: ["primaryTheme","secondaryThemes","keywords","confidence","contextSummary"], properties: { primaryTheme: { type: "string", enum: THEMES }, secondaryThemes: { type: "array", maxItems: 3, items: { type: "string", enum: THEMES } }, keywords: { type: "array", minItems: 3, maxItems: 5, items: { type: "string" } }, confidence: { type: "number", minimum: 0, maximum: 1 }, contextSummary: { type: "string" } } };
+export function minimalCandidate(candidate: RankedCandidate) { return { articleId: candidate.articleId, title: candidate.title, author: candidate.author, publishedAt: candidate.publishedAt, readingMinutes: candidate.readingMinutes, intrinsicScore: candidate.analysis.intrinsicScore, scores: candidate.analysis.scores, primaryTheme: candidate.analysis.primaryTheme, secondaryThemes: candidate.analysis.secondaryThemes, evidence: candidate.analysis.evidence, riskNotes: candidate.analysis.riskNotes, dynamicScore: candidate.dynamicScore, scoreExplanation: candidate.explanation }; }
