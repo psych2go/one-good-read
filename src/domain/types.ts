@@ -9,7 +9,8 @@ export type SourceId =
   | "benedict-evans"
   | "stratechery"
   | "morgan-housel"
-  | "ted-lamade";
+  | "ted-lamade"
+  | "money-stuff";
 
 export interface DiscoveredArticle {
   sourceId: SourceId;

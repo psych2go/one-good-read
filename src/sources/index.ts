@@ -7,9 +7,10 @@ import { PaulGrahamAdapter } from "./paul-graham";
 import { RssSourceAdapter } from "./rss";
 import { RSS_SOURCE_CONFIGS } from "./rss-config";
 import { SubstackArchiveAdapter, SUBSTACK_CONFIGS } from "./substack";
+import { MoneyStuffAdapter } from "./money-stuff";
 
 export function sourceAdapters(): SourceAdapter[] {
-  return [new PaulGrahamAdapter(), new MarginalRevolutionAdapter(), new HowardMarksAdapter(), new FarnamStreetAdapter(), ...RSS_SOURCE_CONFIGS.map((config) => new RssSourceAdapter(config)), ...COLLAB_FUND_CONFIGS.map((config) => new CollabFundAdapter(config)), ...SUBSTACK_CONFIGS.map((config) => new SubstackArchiveAdapter(config))];
+  return [new PaulGrahamAdapter(), new MarginalRevolutionAdapter(), new HowardMarksAdapter(), new FarnamStreetAdapter(), new MoneyStuffAdapter(), ...RSS_SOURCE_CONFIGS.map((config) => new RssSourceAdapter(config)), ...COLLAB_FUND_CONFIGS.map((config) => new CollabFundAdapter(config)), ...SUBSTACK_CONFIGS.map((config) => new SubstackArchiveAdapter(config))];
 }
 
 export function sourceAdapter(id: string): SourceAdapter {
