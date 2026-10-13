@@ -10,11 +10,13 @@ import type { FeedbackKind } from "./domain/types";
 import { AdminPage } from "./web/admin";
 import { AboutPage, ArchivePage, HomePage, ReadPage } from "./web/pages";
 import { BackfillWorkflow } from "./workflows/backfill";
-import { adapterIds } from "./workflows/pipeline";
+import { adapterIds, ingestPushedArticle } from "./workflows/pipeline";
 import { sourceAdapter } from "./sources";
 import { getOrTrainPreferenceModel } from "./preferences/model";
 import { embeddingProvider } from "./embeddings";
 import { isAuthorizedAdmin } from "./security/access";
+import { isIngestBearerAuthorized } from "./security/ingest-auth";
+import { parseEmailIngestPayload } from "./sources/email-ingest";
 import { businessHealth, readOperationalCheck } from "./operations/business-health";
 import { acknowledgeAlert, alertDeliveryReadiness, openAlertSummary, type AlertRow } from "./operations/alerts";
 import { cleanupExpiredObjects, storageUsage } from "./operations/storage";
@@ -81,8 +83,10 @@ app.get("/sitemap.xml", async (c) => {
 
 app.get("/admin", (c) => c.redirect("/admin/", 302));
 app.use("/admin/*", async (c, next) => {
-  if (!await isAuthorizedAdmin(c.req.raw, c.env)) return c.text("Not authorized", 403);
-  if (c.req.method !== "GET" && !sameOrigin(c.req.raw, String(c.env.APP_ORIGIN))) return c.text("Invalid origin", 403);
+  const bearerOk = isIngestBearerAuthorized(c.req.raw, c.env);
+  if (!bearerOk && !await isAuthorizedAdmin(c.req.raw, c.env)) return c.text("Not authorized", 403);
+  // JSON ingest with bearer may omit Origin; browser form posts still require same-origin when Origin is present.
+  if (c.req.method !== "GET" && !bearerOk && !sameOrigin(c.req.raw, String(c.env.APP_ORIGIN))) return c.text("Invalid origin", 403);
   c.header("Cache-Control", "no-store");
   await next();
 });
@@ -185,6 +189,26 @@ app.post("/admin/recommendations/:id/feedback", async (c) => {
   if (typeof kind !== "string" || !isFeedbackKind(kind)) return c.text("Invalid feedback", 400);
   await addFeedback(c.env.DB, c.req.param("id"), kind);
   return c.redirect("/admin/", 303);
+});
+
+app.post("/admin/ingest/email", async (c) => {
+  c.header("Cache-Control", "no-store");
+  let raw: unknown;
+  try { raw = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+  const parsed = parseEmailIngestPayload(raw);
+  if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
+  const result = await ingestPushedArticle(c.env, parsed.article);
+  return c.json({ ok: true, messageId: parsed.messageId, ...result }, result.status === "failed" ? 502 : 200);
+});
+app.post("/api/ingest/email", async (c) => {
+  c.header("Cache-Control", "no-store");
+  if (!isIngestBearerAuthorized(c.req.raw, c.env)) return c.json({ error: "unauthorized" }, 401);
+  let raw: unknown;
+  try { raw = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+  const parsed = parseEmailIngestPayload(raw);
+  if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
+  const result = await ingestPushedArticle(c.env, parsed.article);
+  return c.json({ ok: true, messageId: parsed.messageId, ...result }, result.status === "failed" ? 502 : 200);
 });
 
 app.notFound((c) => c.html(html`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><link rel="stylesheet" href="/styles.css"><title>Not found — One Good Read</title></head><body><main><section class="empty-state"><p class="edition-label">404</p><h1>这里没有今天的阅读。</h1><p><a href="/">返回首页</a></p></section></main></body></html>`, 404));

@@ -57,7 +57,7 @@ The second monitoring slice was deployed and manually bootstrapped on 2026-09-08
 
 ## Production hardening still planned
 
-- Confirm a compliant free full-text discovery path for Bloomberg Money Stuff; the other allowlisted source groups now have adapters.
+- Bloomberg Money Stuff uses push email ingest (`POST /api/ingest/email` or `/admin/ingest/email`) rather than web discovery; newsletter full text is an explicit policy exception for this source only.
 - Access is configured; external Email Sending/domain onboarding and actual alert delivery remain deferred.
 - AI circuit breaker/quota coordination, broad legacy body review, and further diversity/preference-model work remain deferred.
 - Split large analysis artifacts from D1 into R2 before approaching the free D1 per-database limit.

@@ -86,6 +86,53 @@ export async function ingestSource(env: Env, sourceId: string, processLimit: num
   return summary;
 }
 
+export type PushedIngestResult = {
+  articleId: string;
+  canonicalUrl: string;
+  status: "analyzed" | "skipped" | "rejected" | "unavailable" | "failed";
+  articleStatus?: string;
+  reason?: string;
+};
+
+/** Idempotent single-article ingest for push sources (newsletter email). */
+export async function ingestPushedArticle(env: Env, article: DiscoveredArticle): Promise<PushedIngestResult> {
+  const now = new Date().toISOString();
+  const canonicalUrl = normalizeArticleUrl(article.canonicalUrl);
+  const discovered = { ...article, canonicalUrl };
+  const id = await upsertDiscovered(env.DB, discovered, now);
+  const state = await env.DB.prepare("SELECT status,rejection_reason,retry_count FROM articles WHERE id=?")
+    .bind(id).first<{ status: string; rejection_reason: string | null; retry_count: number }>();
+  const retryableRejection = state?.status === "rejected" && state.rejection_reason === "empty_body";
+  const processable = state?.status === "discovered" || (state?.status === "analysis_failed" && state.retry_count < ANALYSIS_RETRY_LIMIT);
+  if (state?.status && !processable && !retryableRejection) {
+    return { articleId: id, canonicalUrl, status: "skipped", articleStatus: state.status, reason: state.rejection_reason ?? undefined };
+  }
+  try {
+    await processArticle(env, id, discovered);
+    const after = await env.DB.prepare("SELECT status,rejection_reason FROM articles WHERE id=?")
+      .bind(id).first<{ status: string; rejection_reason: string | null }>();
+    if (after?.status === "rejected") {
+      return { articleId: id, canonicalUrl, status: "rejected", articleStatus: after.status, reason: after.rejection_reason ?? undefined };
+    }
+    if (after?.status === "unavailable") {
+      return { articleId: id, canonicalUrl, status: "unavailable", articleStatus: after.status, reason: after.rejection_reason ?? undefined };
+    }
+    await env.DB.prepare("UPDATE sources SET last_scanned_at=?, consecutive_failures=0, updated_at=? WHERE id=?")
+      .bind(now, now, discovered.sourceId).run();
+    return { articleId: id, canonicalUrl, status: "analyzed", articleStatus: after?.status };
+  } catch (error) {
+    const message = errorMessage(error);
+    if (error instanceof PermanentArticleError) {
+      await env.DB.prepare("UPDATE articles SET status='unavailable', access_state='unavailable', rejection_reason=?, updated_at=? WHERE id=?")
+        .bind(message.slice(0, 500), new Date().toISOString(), id).run();
+      return { articleId: id, canonicalUrl, status: "unavailable", articleStatus: "unavailable", reason: message };
+    }
+    await env.DB.prepare("UPDATE articles SET status='analysis_failed', retry_count=retry_count+1, rejection_reason=?, updated_at=? WHERE id=?")
+      .bind(message.slice(0, 500), new Date().toISOString(), id).run();
+    return { articleId: id, canonicalUrl, status: "failed", articleStatus: "analysis_failed", reason: message };
+  }
+}
+
 async function processArticle(env: Env, articleId: string, discovered: DiscoveredArticle): Promise<void> {
   const adapter = sourceAdapter(discovered.sourceId);
   const extracted = await adapter.extract(discovered);

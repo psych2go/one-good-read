@@ -18,10 +18,11 @@ The repository now includes source adapters for:
 - Marginal Revolution (Tyler Cowen and Alex Tabarrok)
 - Aswath Damodaran
 - Benedict Evans
+- Bloomberg Money Stuff (email newsletter ingest)
 
 Ted Lamade (Collaborative Fund) was **paused on 2026-09-19** after data review: its full 33-article discovered corpus was rejected by the quality gate with high analysis confidence (max intrinsic 6.84 vs a 7.5 bar). Farnam Street and Nassim Nicholas Taleb were initially paused on the same review but **re-activated the same day**: their samples were partial (20/79 analyzed) or too small (6), so their backlogs are being analyzed to completion before any pause decision.
 
-Bloomberg Money Stuff remains deferred until a compliant, stable, free full-text discovery path is confirmed.
+Bloomberg Money Stuff (Matt Levine) is ingested via the free newsletter email path: full text comes from the subscribed newsletter; the recommendation still links to the Bloomberg canonical URL when present. Bloomberg web pages may remain paywalled — OGR does not scrape paywalled HTML.
 
 The development heuristic analyzer runs without paid credentials but now marks standalone eligibility uncertain; use the local SQL test fixtures to exercise offline publication. It is not a substitute for verified body analysis. Production can use OpenAI or an OpenAI-compatible relay. Set `AI_PROVIDER=openai-compatible`, configure the exact API prefix in `AI_BASE_URL`, and store `AI_API_KEY` as a Wrangler secret.
 
@@ -78,6 +79,8 @@ An hourly Reservoir coordinator safely grows the private candidate pool toward 3
 ## Semantic preference learning
 
 Full vectors are stored privately in R2 and Vectorize. Daily ranking uses compact D1 projections to compute recent-reading connections, knowledge-distance exploration, and a confidence-gated ridge preference model. See `docs/ml-ranking.md`.
+
+See [email ingest](docs/email-ingest.md) for the Money Stuff newsletter API (`INGEST_EMAIL_SECRET`, curl example, migration).
 
 ## Data policy
 
