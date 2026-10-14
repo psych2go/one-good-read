@@ -1,5 +1,5 @@
 import { publicationHealth, type OperationalCheck } from "./business-health";
-import { resolveHealthAlert, sendOperationalAlert } from "./alerts";
+import { resolveAlertsByType, resolveHealthAlert, sendOperationalAlert } from "./alerts";
 import { cleanupExpiredObjects, storageUsage } from "./storage";
 
 /** A single retried Workflow step: each attempt starts durably, all components are diagnosed independently. */
@@ -108,28 +108,40 @@ export async function runBackfillHealthCheck(env: Env): Promise<BackfillMonitorS
   ]);
   const analysisWindowInput: AnalysisHealthWindow = { failed24h: windowCounts?.failed24h ?? 0, processed24h: windowCounts?.processed24h ?? 0, analyses48h: analysisWindow?.n ?? 0, pending: pendingRow?.n ?? 0 };
   const verdict = evaluateAnalysisHealth(analysisWindowInput);
-  const day = now.toISOString().slice(0, 10);
-  // Windowed checks are independent of the reservoir target: a full pool must not hide a dead analysis pipeline.
+  // Stable dedupe keys + resolve-on-healthy: date-keyed episodes previously piled up forever.
+  // Windowed checks stay independent of the reservoir target so a full pool cannot hide a dead pipeline.
   if (verdict.failureRateAlert) {
-    await sendOperationalAlert(env, { dedupeKey: `analysis-failure-window:${day}`, type: "analysis_failure_window", severity: "warning", subject: "近24小时文章分析失败率超过50%", message: `近24小时已处理 ${analysisWindowInput.processed24h} 篇，其中 ${analysisWindowInput.failed24h} 篇失败。请检查中转站 5xx/429 与结构化输出。` });
+    await sendOperationalAlert(env, { dedupeKey: "analysis-failure-window", type: "analysis_failure_window", severity: "warning", subject: "近24小时文章分析失败率超过50%", message: `近24小时已处理 ${analysisWindowInput.processed24h} 篇，其中 ${analysisWindowInput.failed24h} 篇失败。请检查中转站 5xx/429 与结构化输出。` });
+  } else {
+    await resolveAlertsByType(env, "analysis_failure_window");
   }
   if (verdict.stallAlert) {
-    await sendOperationalAlert(env, { dedupeKey: `analysis-stalled:${day}`, type: "analysis_stalled", severity: "critical", subject: "分析管线近48小时零产出", message: `近48小时没有成功分析，但仍有 ${analysisWindowInput.pending} 篇待处理（discovered/analysis_failed）。候选池停止补充，请立即检查 AI 依赖。` });
+    await sendOperationalAlert(env, { dedupeKey: "analysis-stalled", type: "analysis_stalled", severity: "critical", subject: "分析管线近48小时零产出", message: `近48小时没有成功分析，但仍有 ${analysisWindowInput.pending} 篇待处理（discovered/analysis_failed）。候选池停止补充，请立即检查 AI 依赖。` });
+  } else {
+    await resolveAlertsByType(env, "analysis_stalled");
   }
   const target = Number(env.RESERVOIR_TARGET);
+  let reservoirStale = false;
+  let backfillStalled = false;
   if (state.ready < target) {
     const reservoirUpdatedAt = parseSqliteDate(reservoirRow?.updated_at);
     if (!reservoirUpdatedAt || now.getTime() - reservoirUpdatedAt.getTime() > 2 * 60 * 60 * 1_000) {
-      await sendOperationalAlert(env, { dedupeKey: `reservoir-stale:${now.toISOString().slice(0, 13)}`, type: "reservoir_stale", severity: "critical", subject: "Reservoir 超过两小时没有运行记录", message: `当前候选 ${state.ready}/${target}。请检查小时 Cron、Reservoir Workflow 和 Backfill Workflow。` });
+      reservoirStale = true;
+      await sendOperationalAlert(env, { dedupeKey: "reservoir-stale", type: "reservoir_stale", severity: "critical", subject: "Reservoir 超过两小时没有运行记录", message: `当前候选 ${state.ready}/${target}。请检查小时 Cron、Reservoir Workflow 和 Backfill Workflow。` });
     }
-    if (now.getTime() - new Date(state.lastProgressAt).getTime() > 6 * 60 * 60 * 1_000) {
-      await sendOperationalAlert(env, { dedupeKey: `backfill-stalled:${now.toISOString().slice(0, 10)}`, type: "backfill_stalled", severity: "warning", subject: "候选池连续六小时没有增长", message: `当前候选 ${state.ready}/${target}，analysis_failed=${state.failed}。协调器会继续运行，但需要检查来源耗尽、质量通过率或 AI 错误。` });
+    // Only treat a flat ready count as stalled when analysis itself is idle; otherwise failure-rate
+    // / quality gates already explain why the pool is not growing and daily date-keyed noise piles up.
+    const progressStalled = now.getTime() - new Date(state.lastProgressAt).getTime() > 6 * 60 * 60 * 1_000;
+    if (progressStalled && analysisWindowInput.analyses48h === 0) {
+      backfillStalled = true;
+      await sendOperationalAlert(env, { dedupeKey: "backfill-stalled", type: "backfill_stalled", severity: "warning", subject: "候选池连续六小时没有增长", message: `当前候选 ${state.ready}/${target}，analysis_failed=${state.failed}。协调器会继续运行，但需要检查来源耗尽、质量通过率或 AI 错误。` });
     }
   }
-  const processed = counts?.processed ?? 0;
-  if (state.failed >= 10 && processed > 0 && state.failed / processed >= .1) {
-    await sendOperationalAlert(env, { dedupeKey: `analysis-failure-rate:${now.toISOString().slice(0, 10)}`, type: "analysis_failure_rate", severity: "warning", subject: "文章分析失败率超过 10%", message: `已处理 ${processed} 篇，其中 ${state.failed} 篇 analysis_failed。请检查中转站 5xx、超时与结构化输出。` });
-  }
+  if (!reservoirStale) await resolveAlertsByType(env, "reservoir_stale");
+  if (!backfillStalled) await resolveAlertsByType(env, "backfill_stalled");
+  // All-time failure ratio never recovers after a multi-day outage; retire it in favor of the
+  // 24h windowed check and close any leftover open episodes on every healthy monitor pass.
+  await resolveAlertsByType(env, "analysis_failure_rate");
   await env.DB.prepare("INSERT INTO system_state (key,value,updated_at) VALUES ('backfill_monitor',?,CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP")
     .bind(JSON.stringify({ ...state, lastAnalysisAt: analysisWindow?.latest ?? null })).run();
   return state;

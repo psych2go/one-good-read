@@ -141,3 +141,31 @@ describe("webhook delivery and public summary", () => {
     expect(await openAlertSummary(database.db)).toMatchObject({ open: 1, critical: 1 });
   });
 });
+
+describe("pipeline alert recovery", () => {
+  it("resolves every open episode of a type and allows recurrence under a stable key", async () => {
+    const { resolveAlertsByType } = await import("../src/operations/alerts");
+    const env = testEnv(database.db);
+    await sendOperationalAlert(env, { dedupeKey: "analysis-stalled:2026-10-04", type: "analysis_stalled", severity: "critical", subject: "old day", message: "stalled" });
+    await sendOperationalAlert(env, { dedupeKey: "analysis-stalled", type: "analysis_stalled", severity: "critical", subject: "stable", message: "stalled" });
+    await sendOperationalAlert(env, { dedupeKey: "reservoir-stale", type: "reservoir_stale", severity: "critical", subject: "other", message: "keep" });
+    await resolveAlertsByType(env, "analysis_stalled");
+    const lifecycle = database.sqlite.prepare("SELECT dedupe_key,lifecycle_status FROM alerts ORDER BY rowid").all() as Array<{ dedupe_key: string; lifecycle_status: string }>;
+    expect(lifecycle.filter((row) => row.dedupe_key.startsWith("analysis-stalled")).every((row) => row.lifecycle_status === "resolved")).toBe(true);
+    expect(lifecycle.find((row) => row.dedupe_key === "reservoir-stale")?.lifecycle_status).toBe("open");
+    await sendOperationalAlert(env, { dedupeKey: "analysis-stalled", type: "analysis_stalled", severity: "critical", subject: "again", message: "stalled" });
+    expect(database.sqlite.prepare("SELECT count(*) n FROM alerts WHERE dedupe_key='analysis-stalled' AND lifecycle_status='open'").get()).toEqual({ n: 1 });
+  });
+
+  it("clears stable and legacy date-keyed source backfill failures after recovery", async () => {
+    const { resolveSourceBackfillAlerts } = await import("../src/operations/alerts");
+    const env = testEnv(database.db);
+    await sendOperationalAlert(env, { dedupeKey: "backfill-source-failed:benedict-evans:2026-10-14", type: "backfill_source_failed", severity: "warning", subject: "evans", message: "redirects" });
+    await sendOperationalAlert(env, { dedupeKey: "backfill-source-failed:benedict-evans", type: "backfill_source_failed", severity: "warning", subject: "evans", message: "redirects" });
+    await sendOperationalAlert(env, { dedupeKey: "backfill-source-failed:paul-graham", type: "backfill_source_failed", severity: "warning", subject: "pg", message: "timeout" });
+    await resolveSourceBackfillAlerts(env, "benedict-evans");
+    const rows = database.sqlite.prepare("SELECT dedupe_key,lifecycle_status FROM alerts ORDER BY rowid").all() as Array<{ dedupe_key: string; lifecycle_status: string }>;
+    expect(rows.filter((row) => row.dedupe_key.includes("benedict-evans")).every((row) => row.lifecycle_status === "resolved")).toBe(true);
+    expect(rows.find((row) => row.dedupe_key === "backfill-source-failed:paul-graham")?.lifecycle_status).toBe("open");
+  });
+});

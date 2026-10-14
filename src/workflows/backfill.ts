@@ -3,7 +3,7 @@ import { adapterIds, backfillMissingEmbeddings, ingestSource, errorMessage } fro
 import { assertStorageAllowsBackfill } from "../operations/storage";
 import { runOperationalHealthCheck } from "../operations/health";
 import { probeProductionAi } from "../operations/ai-probe";
-import { sendOperationalAlert } from "../operations/alerts";
+import { resolveSourceBackfillAlerts, sendOperationalAlert } from "../operations/alerts";
 
 export interface BackfillWorkflowParams { healthCheck?: boolean; sourceId?: string; limit?: number; pages?: number; embeddingsOnly?: boolean; aiProbe?: boolean; managed?: boolean; scheduledRefresh?: boolean; }
 
@@ -31,14 +31,15 @@ export class BackfillWorkflow extends WorkflowEntrypoint<Env, BackfillWorkflowPa
           // Recheck pause state at execution, including managed/manual source-specific runs.
           const source = await this.env.DB.prepare("SELECT status FROM sources WHERE id=?").bind(sourceId).first<{ status: string }>();
           if (source?.status !== "active") return { sourceId, status: "paused" };
-          return ingestSource(this.env, sourceId, Math.min(event.payload.limit ?? 25, 50), Math.min(event.payload.pages ?? 1, 100), event.payload.scheduledRefresh);
+          const result = await ingestSource(this.env, sourceId, Math.min(event.payload.limit ?? 25, 50), Math.min(event.payload.pages ?? 1, 100), event.payload.scheduledRefresh);
+          await resolveSourceBackfillAlerts(this.env, sourceId);
+          return result;
         }));
       } catch (error) {
         const message = errorMessage(error);
         console.error(JSON.stringify({ event: "backfill_source_failed", sourceId, message }));
-        // A source that fails after discovery looks identical to success in last_scanned_at and
-        // consecutive_failures; surface it as a durable daily alert instead of a swallowed log line.
-        await sendOperationalAlert(this.env, { dedupeKey: `backfill-source-failed:${sourceId}:${new Date().toISOString().slice(0, 10)}`, type: "backfill_source_failed", severity: "warning", subject: `${sourceId} 回填失败`, message: message.slice(0, 400) });
+        // Stable per-source episode: recover closes it; date-keyed keys previously piled up daily.
+        await sendOperationalAlert(this.env, { dedupeKey: `backfill-source-failed:${sourceId}`, type: "backfill_source_failed", severity: "warning", subject: `${sourceId} 回填失败`, message: message.slice(0, 400) });
         results.push({ sourceId, error: message });
       } finally {
         if (event.payload.managed) await step.do(`unlock-${sourceId}`, async () => { await this.env.DB.prepare("UPDATE sources SET backfill_locked_until=NULL WHERE id=?").bind(sourceId).run(); return { unlocked: true }; });

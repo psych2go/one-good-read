@@ -82,6 +82,20 @@ export async function resolveHealthAlert(env: Env, condition: ManagedHealthCondi
       AND EXISTS (SELECT 1 FROM system_state WHERE key='operational_health' AND json_extract(value,'$.id')=?)`)
     .bind(condition, dedupeKey, healthCheckId).run();
 }
+/** Resolve every open/acknowledged episode of a pipeline alert type when its condition clears.
+ * Unlike resolveHealthAlert, pipeline monitors have no attempt-ID authority race to guard. */
+export async function resolveAlertsByType(env: Env, alertType: string): Promise<void> {
+  await env.DB.prepare(`UPDATE alerts SET lifecycle_status='resolved',resolved_at=CURRENT_TIMESTAMP
+    WHERE alert_type=? AND lifecycle_status IN ('open','acknowledged')`).bind(alertType).run();
+}
+
+/** Clear stable and legacy date-keyed backfill_source_failed episodes for one source after a successful ingest. */
+export async function resolveSourceBackfillAlerts(env: Env, sourceId: string): Promise<void> {
+  await env.DB.prepare(`UPDATE alerts SET lifecycle_status='resolved',resolved_at=CURRENT_TIMESTAMP
+    WHERE alert_type='backfill_source_failed' AND lifecycle_status IN ('open','acknowledged')
+      AND (dedupe_key=? OR dedupe_key LIKE ?)`).bind(`backfill-source-failed:${sourceId}`, `backfill-source-failed:${sourceId}:%`).run();
+}
+
 export async function acknowledgeAlert(env: Env, id: string): Promise<"acknowledged" | "unknown" | "inactive"> {
   const row = await env.DB.prepare(`UPDATE alerts SET lifecycle_status='acknowledged',acknowledged_at=coalesce(acknowledged_at,CURRENT_TIMESTAMP)
     WHERE id=? AND lifecycle_status IN ('open','acknowledged') RETURNING id`).bind(id).first();
