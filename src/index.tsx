@@ -11,6 +11,7 @@ import { AdminPage } from "./web/admin";
 import { AboutPage, ArchivePage, HomePage, ReadPage } from "./web/pages";
 import { BackfillWorkflow } from "./workflows/backfill";
 import { adapterIds, ingestPushedArticle } from "./workflows/pipeline";
+import { applyExternalAnalysis } from "./workflows/external-analysis";
 import { sourceAdapter } from "./sources";
 import { getOrTrainPreferenceModel } from "./preferences/model";
 import { embeddingProvider } from "./embeddings";
@@ -209,6 +210,25 @@ app.post("/api/ingest/email", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
   const result = await ingestPushedArticle(c.env, parsed.article);
   return c.json({ ok: true, messageId: parsed.messageId, ...result }, result.status === "failed" ? 502 : 200);
+});
+
+
+app.post("/api/admin/analysis", async (c) => {
+  c.header("Cache-Control", "no-store");
+  if (!isIngestBearerAuthorized(c.req.raw, c.env)) return c.json({ error: "unauthorized" }, 401);
+  let raw: unknown;
+  try { raw = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+  const applied = await applyExternalAnalysis(c.env, raw);
+  if (!applied.ok) return c.json({ error: applied.error }, applied.status as 400 | 404 | 409 | 422);
+  return c.json({ ok: true, ...applied.result }, applied.result.status === "ready" ? 200 : 422);
+});
+app.post("/admin/api/analysis", async (c) => {
+  c.header("Cache-Control", "no-store");
+  let raw: unknown;
+  try { raw = await c.req.json(); } catch { return c.json({ error: "invalid_json" }, 400); }
+  const applied = await applyExternalAnalysis(c.env, raw);
+  if (!applied.ok) return c.json({ error: applied.error }, applied.status as 400 | 404 | 409 | 422);
+  return c.json({ ok: true, ...applied.result }, applied.result.status === "ready" ? 200 : 422);
 });
 
 app.notFound((c) => c.html(html`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="robots" content="noindex"><link rel="stylesheet" href="/styles.css"><title>Not found — One Good Read</title></head><body><main><section class="empty-state"><p class="edition-label">404</p><h1>这里没有今天的阅读。</h1><p><a href="/">返回首页</a></p></section></main></body></html>`, 404));
