@@ -39,6 +39,18 @@ describe("prepared-pool publication faults (real SQL)", () => {
     expect(backfillMissingEmbeddings).not.toHaveBeenCalled(); expect(createAndStoreEmbedding).not.toHaveBeenCalled();
   });
 
+  it("raises a critical selection_degraded alert counting consecutive degraded days", async () => {
+    const { db } = database;
+    await db.prepare("INSERT INTO selection_runs (id,recommendation_date,selection_version,analysis_version,status,failure_reason) VALUES ('prev-1','2026-09-07','v','v','degraded','copywriting_fallback'),('prev-2','2026-09-06','v','v','degraded','copywriting_fallback')").run();
+    await seedCandidate(db, "streak");
+    vi.mocked(provider.writeRecommendation).mockRejectedValue(new Error("Workers AI response did not contain JSON text"));
+    const result = await runDailySelection(testEnv(db), "2026-09-08");
+    expect(result.status).toBe("published");
+    const alert = await db.prepare("SELECT severity,subject FROM alerts WHERE alert_type='selection_degraded'").first<{ severity: string; subject: string }>();
+    expect(alert?.severity).toBe("critical");
+    expect(alert?.subject).toContain("连续 3 天");
+  });
+
   it.each([new Error("429 model_cooldown"), new DOMException("request timeout", "TimeoutError")])("publishes fallback with repeated stored keywords during outage: %s", async (failure) => {
     const { db } = database;
     const winner = await seedCandidate(db, "repeated-keywords", { primaryTheme: "决策与判断", keywords: ["判断", "判断", "判断"] });

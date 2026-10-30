@@ -42,13 +42,13 @@ describe("fallback recommendation copy", () => {
   it("builds copy from the analysis without AI", () => {
     const copy = fallbackRecommendationCopy(candidate());
     expect(copy.whyWorthReading).toContain("判断与决策");
-    expect(copy.whyToday).toContain("长期价值和思想密度");
     expect(copy.keywords[0]).toBe("判断与决策");
+    expect(() => assertPublicRecommendationCopy(copy)).not.toThrow();
   });
 
   it("uses the exploration wording for unfamiliar themes", () => {
     const copy = fallbackRecommendationCopy(candidate({ explorationBonus: 0.5 }));
-    expect(copy.whyToday).toContain("探索空间");
+    expect(copy.whyToday).toMatch(/探索|切换/);
   });
 
   it.each([
@@ -64,6 +64,39 @@ describe("fallback recommendation copy", () => {
     expect(copy.keywords.length).toBeGreaterThanOrEqual(3);
     expect(new Set(copy.keywords).size).toBe(copy.keywords.length);
     expect(copy.keywords.every((keyword) => keyword === keyword.trim())).toBe(true);
+  });
+
+  it("uses the article's own evidence and skips internal notes and control tokens", () => {
+    const base = candidate();
+    base.analysis.evidence = ["文章提出“有用写作”的明确标准：正确、重要、新颖、尽可能有力地表达。<|DELIM_x|>其余部分。"];
+    base.analysis.contextSummary = "盲评认为结构清晰。";
+    base.analysis.keywords = ["有用写作", "资本成本（WACC）? no invalid? Wait", "正确性"];
+    const copy = fallbackRecommendationCopy(base, "2026-10-30");
+    expect(copy.whyWorthReading).toContain("有用写作");
+    expect(copy.whyWorthReading).not.toContain("盲评");
+    expect(copy.whyWorthReading).not.toContain("DELIM");
+    expect(copy.keywords.some((keyword) => keyword.includes("Wait"))).toBe(false);
+    expect(() => assertPublicRecommendationCopy(copy)).not.toThrow();
+  });
+
+  it("is deterministic per date and article but rotates phrasing across days", () => {
+    const base = candidate();
+    base.analysis.evidence = ["文章把期限错配、存款集中和数字化挤兑连成一条完整的风险传导链。"];
+    expect(fallbackRecommendationCopy(base, "2026-10-30")).toEqual(fallbackRecommendationCopy(base, "2026-10-30"));
+    const days = Array.from({ length: 10 }, (_, index) => `2026-10-${String(index + 10).padStart(2, "0")}`);
+    const copies = days.map((date) => fallbackRecommendationCopy(base, date));
+    expect(new Set(copies.map((copy) => copy.whyWorthReading)).size).toBeGreaterThan(2);
+    expect(new Set(copies.map((copy) => copy.whyToday)).size).toBeGreaterThan(2);
+    for (const copy of copies) expect(() => assertPublicRecommendationCopy(copy)).not.toThrow();
+  });
+
+  it("stays within public length limits for very long analysis fields", () => {
+    const base = candidate({ readingMinutes: 45, freshnessBonus: 0.8 });
+    base.analysis.evidence = ["文章" + "非常长的论证细节，".repeat(80) + "结束。"];
+    base.analysis.secondaryThemes = ["一个很长的次要主题名称".repeat(3), "另一个次要主题"];
+    for (const date of ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"]) {
+      expect(() => assertPublicRecommendationCopy(fallbackRecommendationCopy(base, date))).not.toThrow();
+    }
   });
 
   it("deduplicates keywords and caps at five", () => {

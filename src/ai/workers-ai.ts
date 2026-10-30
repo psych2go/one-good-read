@@ -89,7 +89,8 @@ export class WorkersAiProvider implements AiProvider {
       },
       "你是克制的每日阅读编辑。只能从给定Top候选中选择一篇。质量优先，尊重作者与主题疲劳、探索和新文信号。不得选择列表外文章。",
       JSON.stringify({ recentSummary, candidates: candidates.map(minimalCandidate) }),
-      1_024,
+      DAILY_MAX_TOKENS,
+      DAILY_CALL_OPTIONS,
     );
     if (!candidates.some((candidate) => candidate.articleId === result.articleId)) throw new Error("AI selected an article outside Top candidates");
     return result;
@@ -109,7 +110,8 @@ export class WorkersAiProvider implements AiProvider {
       },
       "用简体中文写克制的推荐说明。不要总结全文，不提前讲完结论，不虚构用户状态，不把推荐写成事实背书。为什么值得读60-120字；为什么今天40-100字。",
       JSON.stringify({ recentSummary, winner: minimalCandidate(winner) }),
-      1_024,
+      DAILY_MAX_TOKENS,
+      DAILY_CALL_OPTIONS,
     );
   }
 
@@ -142,7 +144,7 @@ export class WorkersAiProvider implements AiProvider {
     );
   }
 
-  private async callJson<T>(schema: Record<string, unknown>, system: string, input: string, maxTokens: number): Promise<T> {
+  private async callJson<T>(schema: Record<string, unknown>, system: string, input: string, maxTokens: number, options: CallJsonOptions = {}): Promise<T> {
     let lastError = "unknown error";
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
@@ -156,6 +158,7 @@ export class WorkersAiProvider implements AiProvider {
             ],
             response_format: { type: "json_schema", json_schema: schema },
             max_tokens: maxTokens,
+            ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
           },
           { signal: AbortSignal.timeout(120_000), tags: ["one-good-read", "analysis"] },
         );
@@ -164,7 +167,8 @@ export class WorkersAiProvider implements AiProvider {
         return JSON.parse(text) as T;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
-        if (attempt < 3 && /timeout|network|fetch|429|5\d\d|capacity|busy|JSON Mode/i.test(lastError)) {
+        const retryable = isTransientWorkersAiError(lastError) || (options.retryMalformedOutput === true && isMalformedOutputError(error));
+        if (attempt < 3 && retryable) {
           await wait(attempt * 2_000);
           continue;
         }
@@ -175,6 +179,26 @@ export class WorkersAiProvider implements AiProvider {
   }
 }
 
+/** Daily editor/copywriter calls: gpt-oss counts hidden reasoning against max_tokens, so 1k truncated the Chinese JSON. */
+export const DAILY_MAX_TOKENS = 4_096;
+const DAILY_CALL_OPTIONS: CallJsonOptions = { reasoningEffort: "low", retryMalformedOutput: true };
+
+interface CallJsonOptions {
+  /** gpt-oss on Workers AI accepts reasoning_effort low|medium|high (default medium). */
+  reasoningEffort?: "low" | "medium" | "high";
+  /** Retry (bounded by callJson's 3 attempts) when the model returns empty, non-JSON or truncated JSON. */
+  retryMalformedOutput?: boolean;
+}
+
+export function isTransientWorkersAiError(message: string): boolean {
+  return /timeout|network|fetch|429|5\d\d|capacity|busy|JSON Mode/i.test(message);
+}
+
+export function isMalformedOutputError(error: unknown): boolean {
+  if (error instanceof SyntaxError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /did not contain JSON text|Unterminated string|Unexpected end of JSON|is not valid JSON|in JSON at position/i.test(message);
+}
 
 function repairContentEligibility(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;

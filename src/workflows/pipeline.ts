@@ -244,7 +244,7 @@ async function prepareDailyChoice(env: Env, date: string, simulation: boolean): 
     } catch (error) {
       degradations.push("copywriting_fallback");
       console.error(JSON.stringify({ event: "copywriting_fallback", simulation, message: errorMessage(error) }));
-      copy = fallbackRecommendationCopy(winner);
+      copy = fallbackRecommendationCopy(winner, date);
     }
     assertPublicRecommendationCopy(copy);
     return { runId, winner, whyWorthReading: copy.whyWorthReading, whyToday: copy.whyToday, keywords: copy.keywords, degradations };
@@ -277,7 +277,7 @@ async function recordSelectionDegradation(env: Env, date: string, simulation: bo
 }
 
 async function degradedStreakBefore(db: D1Database, date: string): Promise<number> {
-  const rows = await db.prepare("SELECT DISTINCT recommendation_date date FROM selection_runs WHERE status='degraded' AND recommendation_date<? ORDER BY recommendation_date DESC LIMIT 30").all<{ date: string }>();
+  const rows = await db.prepare("SELECT DISTINCT recommendation_date date FROM selection_runs WHERE status='degraded' AND recommendation_date<? ORDER BY recommendation_date DESC LIMIT 30").bind(date).all<{ date: string }>();
   const dates = (rows?.results ?? []).map((row) => row.date).sort().reverse();
   const yesterday = new Date(new Date(`${date}T00:00:00Z`).getTime() - 86_400_000).toISOString().slice(0, 10);
   return dates[0] === yesterday ? consecutiveDateStreak(dates) : 0;
